@@ -18,8 +18,11 @@ services:
     image: outlet-monitor-frontend-prod
     # Loopback-only: reachable from nginx on the same host, never directly
     # from the internet. nginx terminates TLS on :7716 and proxies here.
+    # Host-side port is 3001 (not 7716) because nginx's `listen 7716` binds
+    # the wildcard address, which already covers 127.0.0.1:7716 — Docker
+    # can't also bind that same host:port. Container-internal port stays 3000.
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:3001:3000"
     environment:
       - API_INTERNAL_URL=http://api:5000
       - SCRAPE_SECRET=${SCRAPE_SECRET}

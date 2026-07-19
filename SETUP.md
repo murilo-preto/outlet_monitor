@@ -75,16 +75,17 @@ public internet:
 - `api` (Flask) publishes no host port at all — it's only reachable from
   `frontend` over the internal Docker network. The frontend's own `/api/*`
   routes proxy to it server-side.
-- `frontend` (Next.js) publishes to `127.0.0.1:3000` only — reachable from a
-  reverse proxy on the same host, not directly from outside.
+- `frontend` (Next.js) publishes to `127.0.0.1:3001` only — reachable from a
+  reverse proxy on the same host, not directly from outside. (Not the port
+  your domain is actually served on — see the note below.)
 
 You need a reverse proxy on the host that terminates TLS for your domain and
-forwards to `127.0.0.1:3000`, preserving the `Host` header. `deploy/nginx-outlet-monitor.conf`
+forwards to `127.0.0.1:3001`, preserving the `Host` header. `deploy/nginx-outlet-monitor.conf`
 is a working example (nginx, reusing an existing certbot certificate, served
-on a non-default port). Adapt `listen`, `server_name`, and `ssl_certificate*`
-to your own domain/port/cert, then either add it as its own site or append it
-as an extra `server {}` block into wherever your domain is already
-configured, and:
+on a non-default port, `7716`). Adapt `listen`, `server_name`, and
+`ssl_certificate*` to your own domain/port/cert, then either add it as its
+own site or append it as an extra `server {}` block into wherever your
+domain is already configured, and:
 
 ```bash
 sudo nginx -t
@@ -92,10 +93,21 @@ sudo systemctl reload nginx
 ```
 
 Any reverse proxy works as long as it terminates TLS and forwards to
-`127.0.0.1:3000` — Caddy, Apache, Traefik, etc. If you have no existing
+`127.0.0.1:3001` — Caddy, Apache, Traefik, etc. If you have no existing
 web server and ports 80/443 are free on the host, Caddy is the simplest
 option since it can obtain and renew a certificate automatically with a
-one-line config (`your-domain { reverse_proxy 127.0.0.1:3000 }`).
+one-line config (`your-domain { reverse_proxy 127.0.0.1:3001 }`).
+
+> **Why the internal port (`3001`) is different from the public port
+> (`7716` in the example):** a `listen 7716 ssl;` directive with no host
+> binds the *wildcard* address, which already covers `127.0.0.1:7716` —
+> Docker can't then also bind that same host:port for the container. Pick
+> any free internal port for `docker-compose.prod.yml`'s `ports:` line
+> (`127.0.0.1:<internal-port>:3000`) and point `proxy_pass` at that same
+> `<internal-port>`; it never needs to match the public-facing port, and
+> nothing outside the host ever talks to it directly. If you change it from
+> the `3001` default, update both `docker-compose.prod.yml` and your nginx
+> (or other proxy) config to match.
 
 ### 3.4 Start
 
@@ -120,7 +132,7 @@ scrape — the first time, it'll prompt for the `SCRAPE_SECRET` password
 - Stop (data persists): `docker compose -f docker-compose.prod.yml down`
 - Run the backend test suite: `docker compose run --rm api pytest -q`
 - Manually trigger a scrape from the host:
-  `curl -X POST -H "x-scrape-token: $SCRAPE_SECRET" http://127.0.0.1:3000/api/scrape`
+  `curl -X POST -H "x-scrape-token: $SCRAPE_SECRET" http://127.0.0.1:3001/api/scrape`
 - Price history lives in the `outlet-monitor-data` named Docker volume
   (`data/price_history.db` inside it) — survives `down`/`up`; only removed
   with `docker compose down -v`.
