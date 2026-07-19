@@ -1,0 +1,31 @@
+services:
+  api:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/workspace
+      - outlet-monitor-data:/workspace/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/workspace
+      - frontend-node-modules:/workspace/node_modules
+    environment:
+      - API_INTERNAL_URL=http://api:5000
+    depends_on:
+      - api
+
+volumes:
+  outlet-monitor-data:
+  frontend-node-modules:

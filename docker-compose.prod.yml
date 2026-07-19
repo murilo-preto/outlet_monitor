@@ -1,0 +1,32 @@
+services:
+  api:
+    build: .
+    image: outlet-monitor-api-prod
+    volumes:
+      - outlet-monitor-data:/workspace/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      target: prod
+    image: outlet-monitor-frontend-prod
+    # Loopback-only: reachable from nginx on the same host, never directly
+    # from the internet. nginx terminates TLS on :7716 and proxies here.
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      - API_INTERNAL_URL=http://api:5000
+      - SCRAPE_SECRET=${SCRAPE_SECRET}
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  outlet-monitor-data:
