@@ -23,7 +23,7 @@ function Tab({ label, count, isActive, dotClassName, onClick }: TabProps) {
   return (
     <button
       onClick={onClick}
-      className={`relative flex shrink-0 items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-colors ${
+      className={`relative flex shrink-0 grow items-center justify-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-colors ${
         isActive ? "border-transparent text-accent-ink" : "border-border bg-surface text-ink-secondary"
       }`}
     >
