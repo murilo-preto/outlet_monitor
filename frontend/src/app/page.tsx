@@ -17,10 +17,16 @@ export default function Home() {
   const [categories, setCategories] = useState<CategoryCount[]>([]);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-  const [categoryProducts, setCategoryProducts] = useState<Product[]>([]);
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [fetchedCategoryProducts, setFetchedCategoryProducts] = useState<Product[]>([]);
+  const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // null selectedCategory means "Todos" (all categories) — mirror allProducts
+  // directly rather than re-fetching the same data from the API.
+  const categoryProducts = selectedCategory === null ? allProducts : fetchedCategoryProducts;
+  const selectedProduct =
+    categoryProducts.find((p) => p.product_id === selectedProductId) ?? categoryProducts[0] ?? null;
 
   const loadOverview = useCallback(async () => {
     setError(null);
@@ -28,7 +34,6 @@ export default function Home() {
       const [cats, products] = await Promise.all([getCategories(), getProducts()]);
       setCategories(cats);
       setAllProducts(products);
-      setSelectedCategory((current) => current ?? cats[0]?.category ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao carregar dados");
     } finally {
@@ -45,12 +50,10 @@ export default function Home() {
   }, [loadOverview]);
 
   useEffect(() => {
-    if (!selectedCategory) return;
+    if (selectedCategory === null) return;
     let cancelled = false;
     getProducts(selectedCategory).then((products) => {
-      if (cancelled) return;
-      setCategoryProducts(products);
-      setSelectedProduct(products[0] ?? null);
+      if (!cancelled) setFetchedCategoryProducts(products);
     });
     return () => {
       cancelled = true;
@@ -115,7 +118,7 @@ export default function Home() {
               <ProductCarousel
                 products={categoryProducts}
                 selectedId={selectedProduct?.product_id ?? null}
-                onSelect={setSelectedProduct}
+                onSelect={(product) => setSelectedProductId(product.product_id)}
               />
             </section>
 
@@ -123,7 +126,7 @@ export default function Home() {
 
             <section className="flex flex-col gap-4">
               <h2 className="text-lg font-semibold text-ink">Produtos disponíveis no outlet</h2>
-              <ProductsTable products={allProducts} />
+              <ProductsTable products={categoryProducts} />
             </section>
           </>
         )}
