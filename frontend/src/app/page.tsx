@@ -9,7 +9,6 @@ import { ProductCarousel } from "@/components/ProductCarousel";
 import { ProductDetail } from "@/components/ProductDetail";
 import { ProductsTable } from "@/components/ProductsTable";
 import { ScrapeButton } from "@/components/ScrapeButton";
-import { StatTile } from "@/components/StatTile";
 import { getCategories, getProducts } from "@/lib/api";
 import type { CategoryCount, Product } from "@/lib/types";
 
@@ -60,11 +59,6 @@ export default function Home() {
     };
   }, [selectedCategory]);
 
-  const avgDiscount =
-    allProducts.length > 0
-      ? Math.round(allProducts.reduce((sum, p) => sum + p.discount_pct, 0) / allProducts.length)
-      : 0;
-
   return (
     <div className="flex min-h-screen flex-col bg-page">
       <header className="header-blur sticky top-0 z-20 border-b border-border backdrop-blur">
@@ -92,12 +86,6 @@ export default function Home() {
               Veja a variação de preço dos notebooks ThinkPad, IdeaPad, Yoga e outras linhas
               ao longo do tempo, organizados por categoria.
             </p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3 sm:max-w-md sm:grid-cols-3">
-            <StatTile label="Produtos rastreados" value={String(allProducts.length)} />
-            <StatTile label="Desconto médio" value={`${avgDiscount}%`} />
-            <StatTile label="Categorias" value={String(categories.length)} />
           </div>
         </motion.section>
 
