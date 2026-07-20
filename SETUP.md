@@ -55,6 +55,7 @@ Edit `.env.prod`:
 | Variable | Description |
 |---|---|
 | `SCRAPE_SECRET` | Password required to trigger a scrape (`POST /api/scrape`) from the internet. Generate one with `openssl rand -hex 24`. If left unset, the scrape endpoint is unauthenticated — fine for local dev, not recommended once this is public. |
+| `HOURS_BETWEEN_FETCH` | How often, in hours, the API automatically scrapes and stores a new price snapshot in the background, independent of any manual "Atualizar preços" clicks. Defaults to `24` if unset. |
 
 `.env.prod` is gitignored — never commit it.
 
@@ -131,6 +132,9 @@ scrape — the first time, it'll prompt for the `SCRAPE_SECRET` password
 - Logs: `docker compose -f docker-compose.prod.yml logs -f`
 - Stop (data persists): `docker compose -f docker-compose.prod.yml down`
 - Run the backend test suite: `docker compose run --rm api pytest -q`
+- Seed the database with synthetic price history for local UI testing (not
+  real Lenovo data, not run by CI): `docker compose run --rm api python
+  scripts/seed_db.py --reset`
 - Manually trigger a scrape from the host:
   `curl -X POST -H "x-scrape-token: $SCRAPE_SECRET" http://127.0.0.1:3001/api/scrape`
 - Price history lives in the `outlet-monitor-data` named Docker volume

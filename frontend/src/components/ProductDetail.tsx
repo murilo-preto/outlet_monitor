@@ -5,6 +5,7 @@ import { ExternalLink, Package, Tag } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { PriceHistoryChart } from "./PriceHistoryChart";
+import { PriceRangeGrid } from "./PriceRangeGrid";
 import { SpecsTable } from "./SpecsTable";
 import { getProductHistory } from "@/lib/api";
 import { getCategoryStyle } from "@/lib/categoryStyles";
@@ -48,7 +49,7 @@ function ProductDetailContent({ product }: { product: Product }) {
       transition={{ duration: 0.25 }}
       className="grid gap-6 rounded-3xl border border-border bg-surface p-6 md:grid-cols-[280px_1fr] md:p-8"
     >
-      <div className="flex flex-col gap-4">
+      <div className={`flex flex-col gap-4 ${!product.currently_listed ? "opacity-50 grayscale" : ""}`}>
         <div className="flex h-48 items-center justify-center rounded-2xl bg-surface-raised p-4">
           {product.image_url ? (
             // eslint-disable-next-line @next/next/no-img-element
@@ -61,9 +62,14 @@ function ProductDetailContent({ product }: { product: Product }) {
         <div className="flex items-center gap-1.5 text-xs text-ink-muted">
           <Tag className={`h-3.5 w-3.5 ${style.textClassName}`} />
           {product.category} · {product.condition}
+          {!product.currently_listed && (
+            <span className="ml-auto font-medium text-ink-muted">Fora do outlet</span>
+          )}
         </div>
 
         <h2 className="text-lg font-semibold text-ink">{product.name}</h2>
+
+        <PriceRangeGrid product={product} className="max-w-[220px] text-sm" />
 
         <div className="flex items-baseline gap-2">
           <span className="text-3xl font-semibold text-ink">{formatBRL(product.sale_price)}</span>

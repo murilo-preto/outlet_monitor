@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import { CategoryTabs } from "@/components/CategoryTabs";
 import { ProductCarousel } from "@/components/ProductCarousel";
 import { ProductDetail } from "@/components/ProductDetail";
+import { ProductsTable } from "@/components/ProductsTable";
 import { ScrapeButton } from "@/components/ScrapeButton";
 import { StatTile } from "@/components/StatTile";
 import { getCategories, getProducts } from "@/lib/api";
@@ -119,6 +120,11 @@ export default function Home() {
             </section>
 
             <ProductDetail product={selectedProduct} />
+
+            <section className="flex flex-col gap-4">
+              <h2 className="text-lg font-semibold text-ink">Produtos disponíveis no outlet</h2>
+              <ProductsTable products={allProducts} />
+            </section>
           </>
         )}
       </main>

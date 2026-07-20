@@ -70,13 +70,19 @@ _SELECT_COLUMNS = ", ".join(COLUMNS)
 _SELECT_COLUMNS_PH = ", ".join(f"ph.{col}" for col in COLUMNS)
 
 LATEST_SNAPSHOT_SQL = f"""
-SELECT {_SELECT_COLUMNS_PH}
+SELECT {_SELECT_COLUMNS_PH}, bounds.lowest_price, bounds.highest_price,
+    ph.timestamp = (SELECT MAX(timestamp) FROM price_history) AS currently_listed
 FROM price_history ph
 INNER JOIN (
     SELECT product_id, MAX(timestamp) AS max_ts
     FROM price_history
     GROUP BY product_id
 ) latest ON ph.product_id = latest.product_id AND ph.timestamp = latest.max_ts
+INNER JOIN (
+    SELECT product_id, MIN(sale_price) AS lowest_price, MAX(sale_price) AS highest_price
+    FROM price_history
+    GROUP BY product_id
+) bounds ON ph.product_id = bounds.product_id
 """
 
 HISTORY_SQL = f"""
@@ -161,7 +167,17 @@ def _row_to_dict(row: tuple) -> dict:
 
 
 def get_latest_snapshots(conn: sqlite3.Connection, category: str | None = None) -> list[dict]:
-    """Return the most recent snapshot for every product_id, optionally filtered by category."""
+    """Return the most recent snapshot for every product_id, optionally filtered by category.
+
+    Each snapshot also carries:
+    - `lowest_price`/`highest_price`: the min/max sale_price ever recorded for
+      that product, computed fresh from price_history rather than stored, so
+      they're always current.
+    - `currently_listed`: whether this product's snapshot came from the most
+      recent scrape run (all products in one scrape share the same
+      timestamp). False means the product is still tracked (its price history
+      is kept) but the outlet no longer listed it as of the last scrape.
+    """
     sql = LATEST_SNAPSHOT_SQL
     params: tuple = ()
     if category is not None:
@@ -169,7 +185,13 @@ def get_latest_snapshots(conn: sqlite3.Connection, category: str | None = None) 
         params = (category,)
     sql += " ORDER BY ph.product_id"
     rows = conn.execute(sql, params).fetchall()
-    return [_row_to_dict(row) for row in rows]
+    result = []
+    for row in rows:
+        snapshot = _row_to_dict(row[:-3])
+        snapshot["lowest_price"], snapshot["highest_price"] = row[-3], row[-2]
+        snapshot["currently_listed"] = bool(row[-1])
+        result.append(snapshot)
+    return result
 
 
 def get_product_history(conn: sqlite3.Connection, product_id: str) -> list[dict]:

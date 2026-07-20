@@ -14,6 +14,9 @@ export interface Product {
   category: string;
   image_url: string;
   specs: { label: string; value: string }[];
+  lowest_price: number;
+  highest_price: number;
+  currently_listed: boolean;
 }
 
 export interface CategoryCount {

@@ -11,6 +11,7 @@
   --color-border: rgba(11, 11, 11, 0.1);
   --color-good: #006300;
   --color-critical: #d03b3b;
+  --color-warning: #96600a;
 
   --color-accent: #2a78d6;
   --color-accent-ink: #ffffff;
@@ -36,6 +37,7 @@
   --color-border: var(--color-border);
   --color-good: var(--color-good);
   --color-critical: var(--color-critical);
+  --color-warning: var(--color-warning);
   --color-accent: var(--color-accent);
   --color-accent-ink: var(--color-accent-ink);
   --color-cat-1: var(--color-cat-1);
@@ -62,6 +64,7 @@
     --color-border: rgba(255, 255, 255, 0.1);
     --color-good: #0ca30c;
     --color-critical: #e66767;
+    --color-warning: #e0a53c;
 
     --color-accent: #3987e5;
 

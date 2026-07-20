@@ -1,3 +1,7 @@
+import logging
+import os
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -89,5 +93,43 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> Flask:
     return app
 
 
+DEFAULT_HOURS_BETWEEN_FETCH = 24.0
+
+log = logging.getLogger(__name__)
+
+
+def _run_scheduled_scrapes(app: Flask, interval_seconds: float) -> None:
+    """Fetch and persist a snapshot every `interval_seconds`, forever.
+
+    Sleeps first rather than scraping immediately on startup, so a container
+    restart/redeploy doesn't trigger an extra scrape on top of the schedule.
+    """
+    while True:
+        time.sleep(interval_seconds)
+        try:
+            products = fetch_all_products()
+        except ScrapeError as exc:
+            log.error("scheduled scrape failed: %s", exc)
+            continue
+
+        conn = connect(app.config["DB_PATH"])
+        try:
+            written = append_snapshots(conn, products)
+        finally:
+            conn.close()
+        log.info("scheduled scrape: fetched=%d written=%d", len(products), written)
+
+
+def start_scheduled_scrapes(app: Flask) -> None:
+    hours = float(os.environ.get("HOURS_BETWEEN_FETCH", DEFAULT_HOURS_BETWEEN_FETCH))
+    thread = threading.Thread(
+        target=_run_scheduled_scrapes, args=(app, hours * 3600), daemon=True
+    )
+    thread.start()
+
+
 if __name__ == "__main__":
-    create_app().run(host="0.0.0.0", port=5000)
+    logging.basicConfig(level=logging.INFO)
+    flask_app = create_app()
+    start_scheduled_scrapes(flask_app)
+    flask_app.run(host="0.0.0.0", port=5000)

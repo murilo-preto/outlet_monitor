@@ -116,6 +116,52 @@ def test_product_history_404_for_unknown_product(client):
     assert resp.status_code == 404
 
 
+def test_list_products_includes_lowest_and_highest_price_across_history(client, monkeypatch):
+    monkeypatch.setattr(
+        api_module,
+        "fetch_all_products",
+        lambda: [make_snapshot(timestamp=datetime(2026, 7, 18, tzinfo=timezone.utc), sale_price=1999.00)],
+    )
+    client.post("/scrape")
+    monkeypatch.setattr(
+        api_module,
+        "fetch_all_products",
+        lambda: [make_snapshot(timestamp=datetime(2026, 7, 19, tzinfo=timezone.utc), sale_price=2252.92)],
+    )
+    client.post("/scrape")
+
+    resp = client.get("/products")
+
+    body = resp.get_json()
+    assert body[0]["sale_price"] == 2252.92
+    assert body[0]["lowest_price"] == 1999.00
+    assert body[0]["highest_price"] == 2252.92
+
+
+def test_list_products_flags_products_missing_from_latest_scrape(client, monkeypatch):
+    monkeypatch.setattr(
+        api_module,
+        "fetch_all_products",
+        lambda: [
+            make_snapshot(product_id="stays", timestamp=datetime(2026, 7, 18, tzinfo=timezone.utc)),
+            make_snapshot(product_id="delisted", timestamp=datetime(2026, 7, 18, tzinfo=timezone.utc)),
+        ],
+    )
+    client.post("/scrape")
+    monkeypatch.setattr(
+        api_module,
+        "fetch_all_products",
+        lambda: [make_snapshot(product_id="stays", timestamp=datetime(2026, 7, 19, tzinfo=timezone.utc))],
+    )
+    client.post("/scrape")
+
+    resp = client.get("/products")
+
+    body = {p["product_id"]: p for p in resp.get_json()}
+    assert body["stays"]["currently_listed"] is True
+    assert body["delisted"]["currently_listed"] is False
+
+
 def test_list_products_filters_by_category(client, monkeypatch):
     monkeypatch.setattr(
         api_module,
@@ -157,3 +203,81 @@ def test_cors_header_present(client):
     resp = client.get("/health")
 
     assert resp.headers["Access-Control-Allow-Origin"] == "*"
+
+
+def test_start_scheduled_scrapes_reads_hours_between_fetch_env(client, monkeypatch):
+    monkeypatch.setenv("HOURS_BETWEEN_FETCH", "2")
+    captured = {}
+
+    class FakeThread:
+        def __init__(self, target, args, daemon):
+            captured["target"] = target
+            captured["interval_seconds"] = args[1]
+            captured["daemon"] = daemon
+
+        def start(self):
+            captured["started"] = True
+
+    monkeypatch.setattr(api_module.threading, "Thread", FakeThread)
+
+    api_module.start_scheduled_scrapes(client.application)
+
+    assert captured["interval_seconds"] == 2 * 3600
+    assert captured["daemon"] is True
+    assert captured["started"] is True
+
+
+def test_start_scheduled_scrapes_defaults_to_24_hours(client, monkeypatch):
+    monkeypatch.delenv("HOURS_BETWEEN_FETCH", raising=False)
+    captured = {}
+
+    class FakeThread:
+        def __init__(self, target, args, daemon):
+            captured["interval_seconds"] = args[1]
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(api_module.threading, "Thread", FakeThread)
+
+    api_module.start_scheduled_scrapes(client.application)
+
+    assert captured["interval_seconds"] == 24 * 3600
+
+
+def test_run_scheduled_scrapes_persists_a_snapshot_per_interval(client, monkeypatch):
+    monkeypatch.setattr(api_module, "fetch_all_products", lambda: [make_snapshot()])
+
+    sleep_calls = {"n": 0}
+
+    def fake_sleep(_seconds):
+        sleep_calls["n"] += 1
+        if sleep_calls["n"] > 1:
+            raise RuntimeError("stop loop")
+
+    monkeypatch.setattr(api_module.time, "sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError, match="stop loop"):
+        api_module._run_scheduled_scrapes(client.application, 0.01)
+
+    resp = client.get("/products")
+    assert len(resp.get_json()) == 1
+
+
+def test_run_scheduled_scrapes_recovers_from_scrape_error(client, monkeypatch):
+    def raise_scrape_error():
+        raise ScrapeError("stale pageFilterId")
+
+    monkeypatch.setattr(api_module, "fetch_all_products", raise_scrape_error)
+
+    sleep_calls = {"n": 0}
+
+    def fake_sleep(_seconds):
+        sleep_calls["n"] += 1
+        if sleep_calls["n"] > 1:
+            raise RuntimeError("stop loop")
+
+    monkeypatch.setattr(api_module.time, "sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError, match="stop loop"):
+        api_module._run_scheduled_scrapes(client.application, 0.01)

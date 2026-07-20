@@ -2,6 +2,8 @@ services:
   api:
     build: .
     image: outlet-monitor-api-prod
+    environment:
+      - HOURS_BETWEEN_FETCH=${HOURS_BETWEEN_FETCH:-24}
     volumes:
       - outlet-monitor-data:/workspace/data
     healthcheck:

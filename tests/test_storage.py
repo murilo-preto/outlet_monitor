@@ -109,6 +109,35 @@ def test_get_latest_snapshots_filters_by_category(conn):
     assert [p["product_id"] for p in thinkpads] == ["think1"]
 
 
+def test_get_latest_snapshots_includes_all_time_lowest_and_highest_price(conn):
+    append_snapshots(conn, [make_snapshot(timestamp=datetime(2026, 7, 17, tzinfo=timezone.utc), sale_price=2252.92)])
+    append_snapshots(conn, [make_snapshot(timestamp=datetime(2026, 7, 18, tzinfo=timezone.utc), sale_price=1999.00)])
+    append_snapshots(conn, [make_snapshot(timestamp=datetime(2026, 7, 19, tzinfo=timezone.utc), sale_price=2100.00)])
+
+    rows = get_latest_snapshots(conn)
+
+    assert rows[0]["sale_price"] == 2100.00
+    assert rows[0]["lowest_price"] == 1999.00
+    assert rows[0]["highest_price"] == 2252.92
+
+
+def test_get_latest_snapshots_flags_products_missing_from_latest_scrape(conn):
+    append_snapshots(
+        conn,
+        [
+            make_snapshot(product_id="stays", timestamp=datetime(2026, 7, 18, tzinfo=timezone.utc)),
+            make_snapshot(product_id="delisted", timestamp=datetime(2026, 7, 18, tzinfo=timezone.utc)),
+        ],
+    )
+    # Second scrape run only returns "stays" — "delisted" dropped out of the outlet.
+    append_snapshots(conn, [make_snapshot(product_id="stays", timestamp=datetime(2026, 7, 19, tzinfo=timezone.utc))])
+
+    rows = {row["product_id"]: row for row in get_latest_snapshots(conn)}
+
+    assert rows["stays"]["currently_listed"] is True
+    assert rows["delisted"]["currently_listed"] is False
+
+
 def test_get_category_counts_reflects_latest_snapshot_only(conn):
     append_snapshots(conn, [make_snapshot(product_id="think1", category="ThinkPad")])
     append_snapshots(conn, [make_snapshot(product_id="idea1", category="IdeaPad")])
@@ -151,6 +180,9 @@ def test_connect_migrates_pre_category_schema(tmp_path):
             "category": "Other",
             "image_url": "",
             "specs": [],
+            "lowest_price": 90.0,
+            "highest_price": 90.0,
+            "currently_listed": True,
         }
     ]
 
