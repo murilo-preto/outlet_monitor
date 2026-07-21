@@ -22,6 +22,10 @@ CATEGORY_PATTERNS: list[tuple[str, re.Pattern]] = [
 
 LISTING_PAGE_URL = "https://www.lenovo.com/br/outlet/pt/laptops/"
 SITE_ROOT = "https://www.lenovo.com"
+# The API returns product `url` values relative to the outlet section root
+# (e.g. "/p/laptops/..."), not the site root — prepending only SITE_ROOT
+# produces a link that 503s, since it's missing the /br/outlet/pt segment.
+PRODUCT_URL_PREFIX = SITE_ROOT + "/br/outlet/pt"
 API_URL = "https://openapi.lenovo.com/br/outlet/pt/ofp/search/dlp/product/query/get/_tsc"
 
 # Static category/filter ids captured from a live page load (see PLAN.md Phase 0).
@@ -113,7 +117,7 @@ def _parse_product(raw: dict, timestamp: datetime) -> ProductSnapshot:
         product_id=raw["id"],
         sku=raw["productCode"],
         name=raw["productName"],
-        url=SITE_ROOT + raw["url"],
+        url=PRODUCT_URL_PREFIX + raw["url"],
         list_price=float(raw["webPrice"]),
         sale_price=float(raw["finalPrice"]),
         discount_pct=float(raw["savePercent"]),

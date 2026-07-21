@@ -31,7 +31,7 @@ def test_parse_product_maps_fields():
     assert snapshot.timestamp == timestamp
     assert snapshot.product_id == "82X5X00900_64c9a7c6b7468-4a6c-b2f7-695ca23a0803"
     assert snapshot.sku == "82X5X00900"
-    assert snapshot.url == "https://www.lenovo.com/p/laptops/ideapad/ideapad-100/88ips101778/82x5x00900"
+    assert snapshot.url == "https://www.lenovo.com/br/outlet/pt/p/laptops/ideapad/ideapad-100/88ips101778/82x5x00900"
     assert snapshot.list_price == 2634.99
     assert snapshot.sale_price == 2252.92
     assert snapshot.discount_pct == 14.0

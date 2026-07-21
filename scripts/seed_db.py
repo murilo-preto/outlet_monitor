@@ -64,7 +64,7 @@ def make_history(
                 product_id=product_id,
                 sku=sku,
                 name=name,
-                url=f"https://www.lenovo.com/p/laptops/{sku.lower()}",
+                url=f"https://www.lenovo.com/br/outlet/pt/p/laptops/{sku.lower()}",
                 list_price=base_price,
                 sale_price=round(price, 2),
                 discount_pct=discount_pct,
