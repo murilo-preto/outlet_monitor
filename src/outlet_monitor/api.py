@@ -7,10 +7,12 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request
 
+from outlet_monitor.notify import send_price_changes_async
 from outlet_monitor.scrape import ScrapeError, fetch_all_products
 from outlet_monitor.storage import (
     DEFAULT_DB_PATH,
     append_snapshots,
+    changes_since_previous,
     connect,
     get_category_counts,
     get_latest_snapshots,
@@ -45,14 +47,20 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> Flask:
         conn = connect(app.config["DB_PATH"])
         try:
             written = append_snapshots(conn, products)
+            changes = changes_since_previous(conn)
         finally:
             conn.close()
+
+        # Handed to a background thread: the notifier is not on the critical
+        # path of a scrape, so this response never waits on Telegram.
+        send_price_changes_async(changes)
 
         return (
             jsonify(
                 {
                     "fetched": len(products),
                     "written": written,
+                    "changes": len(changes),
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
             ),
@@ -115,9 +123,16 @@ def _run_scheduled_scrapes(app: Flask, interval_seconds: float) -> None:
         conn = connect(app.config["DB_PATH"])
         try:
             written = append_snapshots(conn, products)
+            changes = changes_since_previous(conn)
         finally:
             conn.close()
-        log.info("scheduled scrape: fetched=%d written=%d", len(products), written)
+        send_price_changes_async(changes)
+        log.info(
+            "scheduled scrape: fetched=%d written=%d changes=%d",
+            len(products),
+            written,
+            len(changes),
+        )
 
 
 def start_scheduled_scrapes(app: Flask) -> None:

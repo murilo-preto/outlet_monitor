@@ -3,6 +3,11 @@ services:
     build: .
     ports:
       - "5000:5000"
+    environment:
+      # Where scrape results are pushed for Telegram broadcast. Deliberately no
+      # depends_on: the notifier being down must never hold back a scrape.
+      # Set to an empty string to disable notifications.
+      - NOTIFIER_URL=http://notifier:8000
     volumes:
       - .:/workspace
       - outlet-monitor-data:/workspace/data

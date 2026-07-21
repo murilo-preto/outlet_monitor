@@ -92,6 +92,16 @@ WHERE product_id = ?
 ORDER BY timestamp
 """
 
+LAST_TWO_TIMESTAMPS_SQL = """
+SELECT DISTINCT timestamp FROM price_history ORDER BY timestamp DESC LIMIT 2
+"""
+
+SNAPSHOT_AT_SQL = """
+SELECT product_id, name, url, sale_price, category
+FROM price_history
+WHERE timestamp = ?
+"""
+
 CATEGORY_COUNTS_SQL = """
 SELECT category, COUNT(*) AS product_count
 FROM (
@@ -198,6 +208,56 @@ def get_product_history(conn: sqlite3.Connection, product_id: str) -> list[dict]
     """Return every snapshot ever recorded for a product_id, oldest first."""
     rows = conn.execute(HISTORY_SQL, (product_id,)).fetchall()
     return [_row_to_dict(row) for row in rows]
+
+
+# Prices are stored as REAL, so compare with a cent of tolerance rather than ==.
+PRICE_EPSILON = 0.01
+
+
+def changes_since_previous(conn: sqlite3.Connection) -> list[dict]:
+    """What changed between the two most recent scrape runs.
+
+    Returns one dict per product whose `sale_price` moved, plus products that
+    appear in the newest run and not in the one before it (`old_price` is None
+    for those). Delisted products are not reported — a product going away is
+    not a price fluctuation.
+
+    Returns an empty list when there is only one scrape on record: on a fresh
+    database every product would otherwise look "new" and produce a report
+    hundreds of items long.
+    """
+    timestamps = [row[0] for row in conn.execute(LAST_TWO_TIMESTAMPS_SQL)]
+    if len(timestamps) < 2:
+        return []
+
+    current_ts, previous_ts = timestamps[0], timestamps[1]
+    previous = {
+        row[0]: row for row in conn.execute(SNAPSHOT_AT_SQL, (previous_ts,))
+    }
+
+    changes = []
+    for product_id, name, url, sale_price, category in conn.execute(
+        SNAPSHOT_AT_SQL, (current_ts,)
+    ):
+        before = previous.get(product_id)
+        if before is None:
+            old_price = None
+        elif abs(before[3] - sale_price) >= PRICE_EPSILON:
+            old_price = before[3]
+        else:
+            continue
+
+        changes.append(
+            {
+                "product_id": product_id,
+                "name": name,
+                "url": url,
+                "category": category,
+                "old_price": old_price,
+                "new_price": sale_price,
+            }
+        )
+    return changes
 
 
 def get_category_counts(conn: sqlite3.Connection) -> list[dict]:

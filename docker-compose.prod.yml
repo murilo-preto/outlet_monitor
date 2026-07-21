@@ -4,6 +4,10 @@ services:
     image: outlet-monitor-api-prod
     environment:
       - HOURS_BETWEEN_FETCH=${HOURS_BETWEEN_FETCH:-24}
+      # Where scrape results are pushed for Telegram broadcast. Deliberately no
+      # depends_on: the notifier being down must never hold back a scrape.
+      # Set to an empty string to disable notifications.
+      - NOTIFIER_URL=${NOTIFIER_URL-http://notifier:8000}
     volumes:
       - outlet-monitor-data:/workspace/data
     healthcheck:

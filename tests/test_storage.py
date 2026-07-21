@@ -4,7 +4,13 @@ from datetime import datetime, timezone
 import pytest
 
 from outlet_monitor.models import ProductSnapshot
-from outlet_monitor.storage import append_snapshots, connect, get_category_counts, get_latest_snapshots
+from outlet_monitor.storage import (
+    append_snapshots,
+    changes_since_previous,
+    connect,
+    get_category_counts,
+    get_latest_snapshots,
+)
 
 
 def make_snapshot(**overrides) -> ProductSnapshot:
@@ -136,6 +142,110 @@ def test_get_latest_snapshots_flags_products_missing_from_latest_scrape(conn):
 
     assert rows["stays"]["currently_listed"] is True
     assert rows["delisted"]["currently_listed"] is False
+
+
+def test_changes_since_previous_is_empty_on_first_scrape(conn):
+    # Everything is "new" on a fresh db; reporting it would mean a report with
+    # one line per product in the outlet.
+    append_snapshots(conn, [make_snapshot(product_id="a"), make_snapshot(product_id="b")])
+
+    assert changes_since_previous(conn) == []
+
+
+def test_changes_since_previous_reports_price_moves(conn):
+    day1 = datetime(2026, 7, 19, tzinfo=timezone.utc)
+    day2 = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    append_snapshots(
+        conn,
+        [
+            make_snapshot(product_id="dropped", timestamp=day1, sale_price=5000.00),
+            make_snapshot(product_id="rose", timestamp=day1, sale_price=3000.00),
+            make_snapshot(product_id="flat", timestamp=day1, sale_price=1000.00),
+        ],
+    )
+    append_snapshots(
+        conn,
+        [
+            make_snapshot(product_id="dropped", timestamp=day2, sale_price=4200.00),
+            make_snapshot(product_id="rose", timestamp=day2, sale_price=3300.00),
+            make_snapshot(product_id="flat", timestamp=day2, sale_price=1000.00),
+        ],
+    )
+
+    changes = {c["product_id"]: c for c in changes_since_previous(conn)}
+
+    assert set(changes) == {"dropped", "rose"}
+    assert (changes["dropped"]["old_price"], changes["dropped"]["new_price"]) == (5000.00, 4200.00)
+    assert (changes["rose"]["old_price"], changes["rose"]["new_price"]) == (3000.00, 3300.00)
+
+
+def test_changes_since_previous_reports_new_products_with_no_old_price(conn):
+    day1 = datetime(2026, 7, 19, tzinfo=timezone.utc)
+    day2 = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    append_snapshots(conn, [make_snapshot(product_id="old", timestamp=day1)])
+    append_snapshots(
+        conn,
+        [
+            make_snapshot(product_id="old", timestamp=day2),
+            make_snapshot(product_id="fresh", timestamp=day2, name="Yoga Slim 7i", sale_price=4999.00),
+        ],
+    )
+
+    changes = changes_since_previous(conn)
+
+    assert len(changes) == 1
+    assert changes[0]["product_id"] == "fresh"
+    assert changes[0]["old_price"] is None
+    assert changes[0]["new_price"] == 4999.00
+    assert changes[0]["name"] == "Yoga Slim 7i"
+
+
+def test_changes_since_previous_ignores_delisted_products(conn):
+    day1 = datetime(2026, 7, 19, tzinfo=timezone.utc)
+    day2 = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    append_snapshots(
+        conn,
+        [
+            make_snapshot(product_id="stays", timestamp=day1),
+            make_snapshot(product_id="gone", timestamp=day1),
+        ],
+    )
+    append_snapshots(conn, [make_snapshot(product_id="stays", timestamp=day2)])
+
+    assert changes_since_previous(conn) == []
+
+
+def test_changes_since_previous_compares_only_the_two_newest_runs(conn):
+    for day, price in ((17, 5000.00), (18, 4000.00), (19, 4000.00)):
+        append_snapshots(
+            conn,
+            [make_snapshot(timestamp=datetime(2026, 7, day, tzinfo=timezone.utc), sale_price=price)],
+        )
+
+    # Price moved between day 17 and 18, but the last two runs are identical.
+    assert changes_since_previous(conn) == []
+
+
+def test_changes_since_previous_ignores_sub_cent_noise(conn):
+    day1 = datetime(2026, 7, 19, tzinfo=timezone.utc)
+    day2 = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    append_snapshots(conn, [make_snapshot(timestamp=day1, sale_price=2252.92)])
+    append_snapshots(conn, [make_snapshot(timestamp=day2, sale_price=2252.921)])
+
+    assert changes_since_previous(conn) == []
+
+
+def test_changes_since_previous_carries_the_category(conn):
+    day1 = datetime(2026, 7, 19, tzinfo=timezone.utc)
+    day2 = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    # "V Series" is the case that matters: the notifier cannot guess it from
+    # the product name, so it has to travel with the change.
+    append_snapshots(conn, [make_snapshot(name="Lenovo V14 Intel Core i3", category="V Series", timestamp=day1, sale_price=2630.83)])
+    append_snapshots(conn, [make_snapshot(name="Lenovo V14 Intel Core i3", category="V Series", timestamp=day2, sale_price=2400.00)])
+
+    changes = changes_since_previous(conn)
+
+    assert changes[0]["category"] == "V Series"
 
 
 def test_get_category_counts_reflects_latest_snapshot_only(conn):
