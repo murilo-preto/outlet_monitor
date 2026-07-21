@@ -46,12 +46,15 @@ export function ScrapeButton({ onDone }: ScrapeButtonProps) {
       <motion.button
         onClick={handleClick}
         disabled={loading}
+        aria-label={loading ? "Buscando preços" : "Atualizar preços"}
         whileHover={{ scale: loading ? 1 : 1.03 }}
         whileTap={{ scale: loading ? 1 : 0.97 }}
-        className="flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-sm font-medium text-accent-ink disabled:opacity-60"
+        className="flex items-center gap-2 rounded-full bg-accent px-3 py-2 text-sm font-medium text-accent-ink disabled:opacity-60 sm:px-4"
       >
         <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-        {loading ? "Buscando..." : "Atualizar preços"}
+        {/* Label collapses on narrow screens so the header fits alongside the
+            alerts link — the icon alone carries this admin-only action. */}
+        <span className="hidden sm:inline">{loading ? "Buscando..." : "Atualizar preços"}</span>
       </motion.button>
       {error && <span className="text-xs text-critical">{error}</span>}
     </div>

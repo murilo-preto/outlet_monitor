@@ -1,7 +1,8 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { TrendingDown } from "lucide-react";
+import { BellRing } from "lucide-react";
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { CategoryTabs } from "@/components/CategoryTabs";
@@ -9,6 +10,7 @@ import { ProductCarousel } from "@/components/ProductCarousel";
 import { ProductDetail } from "@/components/ProductDetail";
 import { ProductsTable } from "@/components/ProductsTable";
 import { ScrapeButton } from "@/components/ScrapeButton";
+import { SiteHeader } from "@/components/SiteHeader";
 import { getCategories, getProducts } from "@/lib/api";
 import type { CategoryCount, Product } from "@/lib/types";
 
@@ -61,15 +63,17 @@ export default function Home() {
 
   return (
     <div className="flex min-h-screen flex-col bg-page">
-      <header className="header-blur sticky top-0 z-20 border-b border-border backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-2 font-semibold text-ink">
-            <TrendingDown className="h-5 w-5 text-accent" />
-            Outlet Watch
-          </div>
-          <ScrapeButton onDone={loadOverview} />
-        </div>
-      </header>
+      <SiteHeader>
+        <Link
+          href="/alertas"
+          className="flex items-center gap-2 rounded-full border border-border bg-surface px-4 py-2 text-sm font-medium text-ink-secondary transition-colors hover:text-ink"
+        >
+          <BellRing className="h-4 w-4 text-accent" />
+          <span className="hidden sm:inline">Alertas no Telegram</span>
+          <span className="sm:hidden">Alertas</span>
+        </Link>
+        <ScrapeButton onDone={loadOverview} />
+      </SiteHeader>
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-12 px-6 py-12">
         <motion.section
