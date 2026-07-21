@@ -33,5 +33,24 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  notifier:
+    build: ./telegram_notifier
+    image: outlet-monitor-notifier-prod
+    # Internal-only: reachable from the other services as http://notifier:8000,
+    # never published to the host or the internet.
+    expose:
+      - "8000"
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    volumes:
+      - notifier-data:/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
 volumes:
   outlet-monitor-data:
+  notifier-data:
