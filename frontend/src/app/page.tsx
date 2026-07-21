@@ -66,9 +66,9 @@ export default function Home() {
       <SiteHeader>
         <Link
           href="/alertas"
-          className="flex items-center gap-2 rounded-full border border-border bg-surface px-4 py-2 text-sm font-medium text-ink-secondary transition-colors hover:text-ink"
+          className="flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-sm font-medium text-accent-ink transition-transform hover:scale-[1.03]"
         >
-          <BellRing className="h-4 w-4 text-accent" />
+          <BellRing className="h-4 w-4" />
           <span className="hidden sm:inline">Alertas no Telegram</span>
           <span className="sm:hidden">Alertas</span>
         </Link>
