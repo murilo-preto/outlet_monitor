@@ -5,6 +5,7 @@ import pytest
 
 from outlet_monitor.models import ProductSnapshot
 from outlet_monitor.storage import (
+    CREATE_TABLE_SQL,
     append_snapshots,
     changes_since_previous,
     connect,
@@ -246,6 +247,66 @@ def test_changes_since_previous_carries_the_category(conn):
     changes = changes_since_previous(conn)
 
     assert changes[0]["category"] == "V Series"
+
+
+def test_append_snapshots_ignores_a_product_repeated_within_one_scrape(conn):
+    day1 = datetime(2026, 7, 19, tzinfo=timezone.utc)
+
+    written = append_snapshots(
+        conn,
+        [make_snapshot(product_id="dup", timestamp=day1), make_snapshot(product_id="dup", timestamp=day1)],
+    )
+
+    assert written == 1
+    assert len(get_latest_snapshots(conn)) == 1
+
+
+def test_append_snapshots_still_records_the_same_product_at_a_later_scrape(conn):
+    append_snapshots(conn, [make_snapshot(timestamp=datetime(2026, 7, 19, tzinfo=timezone.utc))])
+    written = append_snapshots(conn, [make_snapshot(timestamp=datetime(2026, 7, 20, tzinfo=timezone.utc))])
+
+    assert written == 1
+    assert conn.execute("SELECT COUNT(*) FROM price_history").fetchone()[0] == 2
+
+
+def test_connect_clears_pre_existing_duplicates_before_indexing(tmp_path):
+    db_path = tmp_path / "dupes.db"
+    seed = sqlite3.connect(db_path)
+    seed.executescript(CREATE_TABLE_SQL)
+    # Two identical rows for one product in one scrape — what the outlet API
+    # handed back before fetch_all_products() de-duplicated its pages.
+    for _ in range(2):
+        seed.execute(
+            "INSERT INTO price_history "
+            "(timestamp, product_id, sku, name, url, list_price, sale_price, discount_pct, condition, availability, raw_specs) "
+            "VALUES ('2026-07-25T11:31:25+00:00', 'dup', '82UM0002BR', 'Lenovo V15', 'https://x', 2879.99, 2591.99, 10.0, 'Produto novo', 'Available', '')"
+        )
+    seed.commit()
+    seed.close()
+
+    conn = connect(db_path)
+
+    assert conn.execute("SELECT COUNT(*) FROM price_history").fetchone()[0] == 1
+    assert len(get_latest_snapshots(conn)) == 1
+    conn.close()
+
+
+def test_connect_leaves_distinct_rows_alone_when_indexing(tmp_path):
+    db_path = tmp_path / "clean.db"
+    conn = connect(db_path)
+    append_snapshots(
+        conn,
+        [
+            make_snapshot(product_id="a", timestamp=datetime(2026, 7, 19, tzinfo=timezone.utc)),
+            make_snapshot(product_id="b", timestamp=datetime(2026, 7, 19, tzinfo=timezone.utc)),
+        ],
+    )
+    conn.close()
+
+    reopened = connect(db_path)
+
+    assert reopened.execute("SELECT COUNT(*) FROM price_history").fetchone()[0] == 2
+    reopened.close()
 
 
 def test_get_category_counts_reflects_latest_snapshot_only(conn):

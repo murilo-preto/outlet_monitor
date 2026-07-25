@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import urllib.parse
 from datetime import datetime, timezone
@@ -6,6 +7,8 @@ from datetime import datetime, timezone
 import requests
 
 from outlet_monitor.models import ProductSnapshot
+
+log = logging.getLogger(__name__)
 
 # Lenovo's outlet API has no clean "family" field, so category is inferred from
 # the product name. Order doesn't matter here since each pattern is anchored to
@@ -133,6 +136,12 @@ def _parse_product(raw: dict, timestamp: datetime) -> ProductSnapshot:
 def fetch_all_products(session: requests.Session | None = None) -> list[ProductSnapshot]:
     """Fetch every laptop listing in the Lenovo BR outlet, across all pages.
 
+    Pages are requested sequentially against a live, price-sorted result set,
+    so an item sitting on a page boundary can come back on two consecutive
+    pages if the catalogue shifts mid-fetch. Duplicates are dropped here,
+    keeping the first occurrence — one product must appear at most once per
+    scrape, or it renders twice and inflates its category's count.
+
     Raises ScrapeError if the API responds successfully but returns zero
     products — this almost always means PAGE_FILTER_ID/CLASSIFICATION_GROUP_IDS
     have gone stale, not that the outlet is genuinely empty.
@@ -142,7 +151,8 @@ def fetch_all_products(session: requests.Session | None = None) -> list[ProductS
     timestamp = datetime.now(timezone.utc)
 
     try:
-        products: list[ProductSnapshot] = []
+        products: dict[str, ProductSnapshot] = {}
+        duplicates = 0
         page = 1
         page_count = 1
         while page <= page_count:
@@ -153,7 +163,11 @@ def fetch_all_products(session: requests.Session | None = None) -> list[ProductS
             page_count = data["data"]["pageCount"]
             for group in data["data"]["data"]:
                 for raw_product in group.get("products", []):
-                    products.append(_parse_product(raw_product, timestamp))
+                    product = _parse_product(raw_product, timestamp)
+                    if product.product_id in products:
+                        duplicates += 1
+                        continue
+                    products[product.product_id] = product
 
             page += 1
 
@@ -163,7 +177,18 @@ def fetch_all_products(session: requests.Session | None = None) -> list[ProductS
                 "PAGE_FILTER_ID/CLASSIFICATION_GROUP_IDS, not an empty outlet."
             )
 
-        return products
+        if duplicates:
+            # Not an error — the paging race is expected — but a sudden jump
+            # here is the first sign the result set is churning mid-fetch,
+            # which also means items can be missed entirely.
+            log.info(
+                "dropped %d duplicate listing(s) across %d page(s); %d unique products",
+                duplicates,
+                page_count,
+                len(products),
+            )
+
+        return list(products.values())
     finally:
         if owns_session:
             session.close()

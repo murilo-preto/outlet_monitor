@@ -35,6 +35,23 @@ CREATE INDEX IF NOT EXISTS idx_price_history_timestamp ON price_history(timestam
 CREATE INDEX IF NOT EXISTS idx_price_history_category ON price_history(category);
 """
 
+# One row per product per scrape. The scraper already de-duplicates what the
+# outlet API hands back, so this is the backstop: any future source of repeats
+# is dropped by INSERT OR IGNORE instead of silently double-counting a product.
+UNIQUE_SNAPSHOT_INDEX = "idx_price_history_ts_product"
+CREATE_UNIQUE_SNAPSHOT_INDEX_SQL = f"""
+CREATE UNIQUE INDEX {UNIQUE_SNAPSHOT_INDEX} ON price_history(timestamp, product_id)
+"""
+
+# Ran once, immediately before the unique index is first built: the index
+# cannot be created while duplicates from before it existed are still on disk.
+# Keeps the earliest row of each (timestamp, product_id) — they are identical
+# copies of one listing, so which one survives doesn't matter.
+DELETE_DUPLICATE_SNAPSHOTS_SQL = """
+DELETE FROM price_history
+WHERE id NOT IN (SELECT MIN(id) FROM price_history GROUP BY timestamp, product_id)
+"""
+
 # Columns added after the initial release: (name, ALTER-COLUMN-DEF). Applied to
 # any pre-existing db file that predates them, so older data/price_history.db
 # volumes don't break on the new INSERT/SELECT column lists.
@@ -45,7 +62,7 @@ _MIGRATIONS = (
 )
 
 INSERT_SQL = """
-INSERT INTO price_history
+INSERT OR IGNORE INTO price_history
     (timestamp, product_id, sku, name, url, list_price, sale_price, discount_pct, condition, availability, raw_specs, category, image_url, specs)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
@@ -133,6 +150,25 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _ensure_unique_snapshot_index(conn: sqlite3.Connection) -> None:
+    """Build the (timestamp, product_id) unique index, once, per database file.
+
+    Guarded on the index not already existing rather than using IF NOT EXISTS,
+    so the duplicate sweep is a one-time migration cost and not a full scan on
+    every connection — connect() runs per request.
+    """
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",
+        (UNIQUE_SNAPSHOT_INDEX,),
+    ).fetchone()
+    if exists:
+        return
+
+    conn.execute(DELETE_DUPLICATE_SNAPSHOTS_SQL)
+    conn.execute(CREATE_UNIQUE_SNAPSHOT_INDEX_SQL)
+    conn.commit()
+
+
 def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -140,16 +176,20 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn.executescript(CREATE_TABLE_SQL)
     _apply_migrations(conn)
     conn.executescript(CREATE_INDEXES_SQL)
+    _ensure_unique_snapshot_index(conn)
     return conn
 
 
 def append_snapshots(conn: sqlite3.Connection, snapshots: list[ProductSnapshot]) -> int:
     """Append snapshots as new rows (never updates/overwrites existing rows).
 
-    Rows with no usable price are skipped rather than written as garbage.
-    Returns the number of rows actually written.
+    Rows with no usable price are skipped rather than written as garbage, and
+    a product already recorded at this timestamp is ignored rather than stored
+    twice. Returns the number of rows actually written, which is why it counts
+    what sqlite committed instead of the size of the input.
     """
     valid = [s for s in snapshots if s.list_price > 0 and s.sale_price > 0]
+    before = conn.total_changes
 
     conn.executemany(
         INSERT_SQL,
@@ -174,7 +214,7 @@ def append_snapshots(conn: sqlite3.Connection, snapshots: list[ProductSnapshot])
         ],
     )
     conn.commit()
-    return len(valid)
+    return conn.total_changes - before
 
 
 def _row_to_dict(row: tuple) -> dict:

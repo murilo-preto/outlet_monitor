@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
-from outlet_monitor.scrape import _build_url, _infer_category, _parse_product
+import outlet_monitor.scrape as scrape_module
+from outlet_monitor.scrape import _build_url, _infer_category, _parse_product, fetch_all_products
 
 RAW_PRODUCT = {
     "id": "82X5X00900_64c9a7c6b7468-4a6c-b2f7-695ca23a0803",
@@ -67,6 +68,50 @@ def test_infer_category_matches_known_families():
     assert _infer_category('LOQ 15IRX9') == "LOQ"
     assert _infer_category('Lenovo V14 AMD Ryzen 5 7520U') == "V Series"
     assert _infer_category('Some Unknown Laptop Name') == "Other"
+
+
+def _raw(product_id: str) -> dict:
+    return {**RAW_PRODUCT, "id": product_id, "productCode": product_id.split("_")[0]}
+
+
+def _fake_pages(pages: list[list[dict]], monkeypatch) -> None:
+    """Serve `pages` (a list of per-page product lists) to fetch_all_products."""
+
+    def fake_fetch(_session, page: int) -> dict:
+        return {
+            "status": 200,
+            "data": {"pageCount": len(pages), "data": [{"products": pages[page - 1]}]},
+        }
+
+    monkeypatch.setattr(scrape_module, "_fetch_raw_page", fake_fetch)
+
+
+def test_fetch_all_products_drops_ids_repeated_across_pages(monkeypatch):
+    # A product on a page boundary comes back on both pages when the live,
+    # price-sorted result set shifts between the two requests.
+    _fake_pages([[_raw("a"), _raw("b")], [_raw("b"), _raw("c")]], monkeypatch)
+
+    products = fetch_all_products()
+
+    assert [p.product_id for p in products] == ["a", "b", "c"]
+
+
+def test_fetch_all_products_keeps_the_first_copy_of_a_duplicate(monkeypatch):
+    first = {**_raw("a"), "finalPrice": "1000.00"}
+    second = {**_raw("a"), "finalPrice": "2000.00"}
+    _fake_pages([[first], [second]], monkeypatch)
+
+    products = fetch_all_products()
+
+    assert [p.sale_price for p in products] == [1000.00]
+
+
+def test_fetch_all_products_shares_one_timestamp_across_pages(monkeypatch):
+    _fake_pages([[_raw("a")], [_raw("b")]], monkeypatch)
+
+    products = fetch_all_products()
+
+    assert len({p.timestamp for p in products}) == 1
 
 
 def test_build_url_double_encodes_page_number():
