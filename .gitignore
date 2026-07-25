@@ -7,3 +7,5 @@ data/*.db
 .env
 .env.prod
 .claude/
+# Downloads of the /export.csv endpoint — snapshots of the price history, not source.
+*.csv
