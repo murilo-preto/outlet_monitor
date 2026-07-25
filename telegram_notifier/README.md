@@ -116,6 +116,17 @@ Response:
 { "status": "ok", "subscribers": 12 }
 ```
 
+## Tests
+
+```
+docker compose run --rm notifier pytest -q
+```
+
+Separate from the monitor's suite (`docker compose run --rm api pytest -q`),
+because this service has its own dependencies. Covers report rendering and
+payload validation; the bot handlers and the subscriber store are not covered
+yet.
+
 ## How the price monitor calls it
 
 Wired up in `src/outlet_monitor/`:

@@ -132,6 +132,8 @@ scrape — the first time, it'll prompt for the `SCRAPE_SECRET` password
 - Logs: `docker compose -f docker-compose.prod.yml logs -f`
 - Stop (data persists): `docker compose -f docker-compose.prod.yml down`
 - Run the backend test suite: `docker compose run --rm api pytest -q`
+- Run the notifier's own test suite (separate service, separate deps):
+  `docker compose run --rm notifier pytest -q`
 - Seed the database with synthetic price history for local UI testing (not
   real Lenovo data, not run by CI): `docker compose run --rm api python
   scripts/seed_db.py --reset`

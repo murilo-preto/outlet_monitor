@@ -13,6 +13,13 @@ dev = [
     "pytest>=8.0",
 ]
 
+[tool.pytest.ini_options]
+# The notifier is a separate service with its own dependencies and its own
+# pytest.ini; a bare `pytest` here must not try to collect its suite, since
+# this environment has no pydantic/telegram. Run that one with
+# `docker compose run --rm notifier pytest -q`.
+testpaths = ["tests"]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

@@ -12,10 +12,14 @@ ENV PATH="/opt/venv/bin:${PATH}"
 
 WORKDIR /workspace
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# pytest ships in the image so the suite runs the same way the api's does:
+# `docker compose run --rm notifier pytest -q`.
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install --no-cache-dir -r requirements-dev.txt
 
 COPY app ./app
+COPY pytest.ini ./
+COPY tests ./tests
 
 # Subscribers SQLite lives here; mounted as a named volume in compose.
 ENV SUBSCRIBERS_DB_PATH=/data/subscribers.db
