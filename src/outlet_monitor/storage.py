@@ -126,6 +126,10 @@ FROM price_history
 WHERE timestamp = ?
 """
 
+SEEN_BEFORE_SQL = """
+SELECT DISTINCT product_id FROM price_history WHERE timestamp < ?
+"""
+
 CATEGORY_COUNTS_SQL = """
 SELECT category, COUNT(*) AS product_count
 FROM (
@@ -279,6 +283,14 @@ def changes_since_previous(conn: sqlite3.Connection) -> list[dict]:
     for those). Delisted products are not reported — a product going away is
     not a price fluctuation.
 
+    Each change carries an `event`:
+    - "price": the product was listed before and its `sale_price` moved.
+    - "new": first time this product_id has ever been seen.
+    - "relisted": it was absent from the previous run but had been listed at
+      some earlier point. Outlet stock churns — units sell out and the same
+      configuration reappears days later — so this is worth telling apart from
+      a genuinely new listing.
+
     Returns an empty list when there is only one scrape on record: on a fresh
     database every product would otherwise look "new" and produce a report
     hundreds of items long.
@@ -291,6 +303,7 @@ def changes_since_previous(conn: sqlite3.Connection) -> list[dict]:
     previous = {
         row[0]: row for row in conn.execute(SNAPSHOT_AT_SQL, (previous_ts,))
     }
+    seen_before = {row[0] for row in conn.execute(SEEN_BEFORE_SQL, (previous_ts,))}
 
     changes = []
     for product_id, name, url, sale_price, category in conn.execute(
@@ -299,8 +312,10 @@ def changes_since_previous(conn: sqlite3.Connection) -> list[dict]:
         before = previous.get(product_id)
         if before is None:
             old_price = None
+            event = "relisted" if product_id in seen_before else "new"
         elif abs(before[3] - sale_price) >= PRICE_EPSILON:
             old_price = before[3]
+            event = "price"
         else:
             continue
 
@@ -312,6 +327,7 @@ def changes_since_previous(conn: sqlite3.Connection) -> list[dict]:
                 "category": category,
                 "old_price": old_price,
                 "new_price": sale_price,
+                "event": event,
             }
         )
     return changes

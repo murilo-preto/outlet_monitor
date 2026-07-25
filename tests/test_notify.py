@@ -5,9 +5,9 @@ from outlet_monitor import notify
 
 CHANGES = [
     {"product_id": "p1", "name": "Yoga Slim 7i", "url": "https://x/yoga",
-     "category": "Yoga", "old_price": 5999.00, "new_price": 4999.00},
+     "category": "Yoga", "old_price": 5999.00, "new_price": 4999.00, "event": "price"},
     {"product_id": "p2", "name": "Lenovo V14 Intel Core i3", "url": "https://x/v14",
-     "category": "V Series", "old_price": None, "new_price": 8999.00},
+     "category": "V Series", "old_price": None, "new_price": 8999.00, "event": "relisted"},
 ]
 
 
@@ -38,11 +38,12 @@ def test_send_price_changes_posts_notifier_payload(monkeypatch):
     assert payload == {
         "changes": [
             {"name": "Yoga Slim 7i", "new_price": 4999.00, "old_price": 5999.00,
-             "url": "https://x/yoga", "category": "Yoga"},
+             "url": "https://x/yoga", "category": "Yoga", "event": "price"},
             # "V Series" is unguessable from the name — it only reaches the
-            # notifier because the monitor classified it.
+            # notifier because the monitor classified it. Same for "relisted":
+            # only the monitor has the history to tell it from a new listing.
             {"name": "Lenovo V14 Intel Core i3", "new_price": 8999.00, "old_price": None,
-             "url": "https://x/v14", "category": "V Series"},
+             "url": "https://x/v14", "category": "V Series", "event": "relisted"},
         ]
     }
 
@@ -132,7 +133,7 @@ def test_send_price_changes_tolerates_missing_optional_keys(monkeypatch):
     assert notify.send_price_changes([{"name": "Bare", "new_price": 10.0}]) is True
     assert sent[0]["changes"][0] == {
         "name": "Bare", "new_price": 10.0, "old_price": None,
-        "url": None, "category": None,
+        "url": None, "category": None, "event": None,
     }
 
 

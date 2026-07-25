@@ -16,11 +16,21 @@ def format_brl(value: float) -> str:
     return f"R$ {formatted}"
 
 
+def _event_of(change: PriceChange) -> str:
+    """What this change is, falling back to the old price-only payload shape."""
+    if change.event:
+        return change.event
+    return "price" if change.old_price is not None else "new"
+
+
 def _change_line(change: PriceChange) -> str:
     name = escape(change.name)
     label = f'<a href="{escape(change.url, quote=True)}">{name}</a>' if change.url else f"<b>{name}</b>"
 
-    if change.old_price is None:
+    event = _event_of(change)
+    if event == "relisted":
+        return f"🔁 {label}\n    De volta ao outlet · {format_brl(change.new_price)}"
+    if event == "new" or change.old_price is None:
         return f"🆕 {label}\n    {format_brl(change.new_price)}"
 
     delta = change.new_price - change.old_price
@@ -40,7 +50,8 @@ def build_messages(payload: NotifyRequest) -> list[str]:
     """Render the report, split into chunks that fit Telegram's size limit."""
     drops = sum(1 for c in payload.changes if c.old_price is not None and c.new_price < c.old_price)
     rises = sum(1 for c in payload.changes if c.old_price is not None and c.new_price > c.old_price)
-    news = sum(1 for c in payload.changes if c.old_price is None)
+    news = sum(1 for c in payload.changes if _event_of(c) == "new")
+    relisted = sum(1 for c in payload.changes if _event_of(c) == "relisted")
 
     parts = []
     if drops:
@@ -49,6 +60,8 @@ def build_messages(payload: NotifyRequest) -> list[str]:
         parts.append(f"{rises} alta(s)")
     if news:
         parts.append(f"{news} novo(s)")
+    if relisted:
+        parts.append(f"{relisted} de volta")
     summary = ", ".join(parts) or f"{len(payload.changes)} atualização(ões)"
 
     title = escape(payload.title) if payload.title else "Alerta de preços — Lenovo Outlet"

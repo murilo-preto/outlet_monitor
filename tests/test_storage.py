@@ -249,6 +249,53 @@ def test_changes_since_previous_carries_the_category(conn):
     assert changes[0]["category"] == "V Series"
 
 
+def test_changes_since_previous_labels_a_first_ever_listing_as_new(conn):
+    day1 = datetime(2026, 7, 19, tzinfo=timezone.utc)
+    day2 = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    append_snapshots(conn, [make_snapshot(product_id="old", timestamp=day1)])
+    append_snapshots(
+        conn,
+        [
+            make_snapshot(product_id="old", timestamp=day2),
+            make_snapshot(product_id="fresh", timestamp=day2),
+        ],
+    )
+
+    changes = {c["product_id"]: c for c in changes_since_previous(conn)}
+
+    assert changes["fresh"]["event"] == "new"
+
+
+def test_changes_since_previous_labels_a_returning_product_as_relisted(conn):
+    # Sold out on day 2, back on the shelf on day 3 — not a new listing.
+    for day, products in (
+        (19, ["anchor", "comes_back"]),
+        (20, ["anchor"]),
+        (21, ["anchor", "comes_back"]),
+    ):
+        append_snapshots(
+            conn,
+            [
+                make_snapshot(product_id=p, timestamp=datetime(2026, 7, day, tzinfo=timezone.utc))
+                for p in products
+            ],
+        )
+
+    changes = {c["product_id"]: c for c in changes_since_previous(conn)}
+
+    assert changes["comes_back"]["event"] == "relisted"
+    assert changes["comes_back"]["old_price"] is None
+
+
+def test_changes_since_previous_labels_a_price_move_as_price(conn):
+    day1 = datetime(2026, 7, 19, tzinfo=timezone.utc)
+    day2 = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    append_snapshots(conn, [make_snapshot(timestamp=day1, sale_price=2252.92)])
+    append_snapshots(conn, [make_snapshot(timestamp=day2, sale_price=2100.00)])
+
+    assert changes_since_previous(conn)[0]["event"] == "price"
+
+
 def test_append_snapshots_ignores_a_product_repeated_within_one_scrape(conn):
     day1 = datetime(2026, 7, 19, tzinfo=timezone.utc)
 

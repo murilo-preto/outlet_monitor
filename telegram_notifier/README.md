@@ -74,15 +74,26 @@ after its first price change, with no redeploy.
       "name": "ThinkPad E14 Gen 5",
       "old_price": 5499.00,
       "new_price": 4799.00,
-      "url": "https://www.lenovo.com/br/outlet/pt/..."  // optional
+      "url": "https://www.lenovo.com/br/outlet/pt/...",  // optional
+      "event": "price"                                   // optional, see below
     },
     {
       "name": "ThinkPad T14s Gen 4",
       "new_price": 7299.00        // no old_price => rendered as a new listing
+    },
+    {
+      "name": "Legion 5i Gen 7",
+      "new_price": 6199.00,
+      "event": "relisted"         // 🔁 back in stock, not a first listing
     }
   ]
 }
 ```
+
+`event` is one of `"price"`, `"new"` or `"relisted"`. It is optional and
+inferred from `old_price` when absent, so older callers keep working — but only
+the caller has the scrape history needed to tell a product returning to the
+outlet from one being listed for the first time.
 
 Response:
 
@@ -110,7 +121,10 @@ Response:
 Wired up in `src/outlet_monitor/`:
 
 - `storage.changes_since_previous(conn)` diffs the two most recent scrape runs
-  and returns price moves plus newly listed products.
+  and returns price moves plus newly listed products, tagging each with the
+  `event` above. Outlet stock churns — units sell out and the same
+  configuration reappears days later — so a relist is worth telling apart from
+  a first listing.
 - `notify.send_price_changes_async(changes)` hands the POST to a daemon thread,
   so `/scrape` returns without waiting on Telegram. Every failure is logged and
   swallowed — a notifier that is down never costs a price snapshot.

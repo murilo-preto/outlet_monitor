@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -17,6 +19,14 @@ class PriceChange(BaseModel):
         description=(
             "Product line this belongs to, e.g. 'Yoga' or 'V Series'. Drives the "
             "filter menu. Falls back to guessing from the name when omitted."
+        ),
+    )
+    event: Literal["price", "new", "relisted"] | None = Field(
+        None,
+        description=(
+            "What happened: a price move, a first-ever listing, or a product "
+            "returning to the outlet after being sold out. Only the caller "
+            "knows — inferred from old_price when omitted."
         ),
     )
 

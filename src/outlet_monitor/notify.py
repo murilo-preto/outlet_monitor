@@ -48,6 +48,9 @@ def send_price_changes(changes: list[dict]) -> bool:
                     # name — some families ("V Series") are not derivable from
                     # the name at all.
                     "category": change.get("category"),
+                    # "new" / "relisted" / "price". Only we can tell a first
+                    # listing from a returning one; the notifier has no history.
+                    "event": change.get("event"),
                 }
                 for change in changes
             ]
