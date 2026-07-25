@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 from outlet_monitor.models import ProductSnapshot
@@ -90,6 +91,12 @@ SELECT {_SELECT_COLUMNS}
 FROM price_history
 WHERE product_id = ?
 ORDER BY timestamp
+"""
+
+EXPORT_SQL = f"""
+SELECT {_SELECT_COLUMNS}
+FROM price_history
+ORDER BY timestamp, product_id
 """
 
 LAST_TWO_TIMESTAMPS_SQL = """
@@ -202,6 +209,16 @@ def get_latest_snapshots(conn: sqlite3.Connection, category: str | None = None) 
         snapshot["currently_listed"] = bool(row[-1])
         result.append(snapshot)
     return result
+
+
+def iter_all_snapshots(conn: sqlite3.Connection) -> Iterator[tuple]:
+    """Yield every snapshot ever recorded as a raw column tuple, oldest first.
+
+    Column order matches COLUMNS. Unlike the other readers this stays a
+    cursor-backed iterator and does no per-row decoding, so a full export
+    never materialises the whole table in memory.
+    """
+    yield from conn.execute(EXPORT_SQL)
 
 
 def get_product_history(conn: sqlite3.Connection, product_id: str) -> list[dict]:

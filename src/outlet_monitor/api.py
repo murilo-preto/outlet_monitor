@@ -1,3 +1,5 @@
+import csv
+import io
 import logging
 import os
 import threading
@@ -5,11 +7,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 
 from outlet_monitor.notify import send_price_changes_async
 from outlet_monitor.scrape import ScrapeError, fetch_all_products
 from outlet_monitor.storage import (
+    COLUMNS,
     DEFAULT_DB_PATH,
     append_snapshots,
     changes_since_previous,
@@ -17,6 +20,7 @@ from outlet_monitor.storage import (
     get_category_counts,
     get_latest_snapshots,
     get_product_history,
+    iter_all_snapshots,
 )
 
 
@@ -97,6 +101,43 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> Flask:
         if not history:
             return jsonify({"error": f"no history for product_id {product_id!r}"}), 404
         return jsonify(history)
+
+    @app.get("/export.csv")
+    def export_csv():
+        db_path = app.config["DB_PATH"]
+
+        def generate():
+            # The connection is opened inside the generator and closed only
+            # once the last row has been written, since rows are pulled from
+            # sqlite lazily as the response streams out.
+            conn = connect(db_path)
+            try:
+                buffer = io.StringIO()
+                writer = csv.writer(buffer)
+
+                def flush() -> str:
+                    chunk = buffer.getvalue()
+                    buffer.seek(0)
+                    buffer.truncate(0)
+                    return chunk
+
+                # BOM so Excel reads the accented product names as UTF-8
+                # instead of falling back to the local ANSI codepage.
+                yield "\ufeff"
+                writer.writerow(COLUMNS)
+                yield flush()
+                for row in iter_all_snapshots(conn):
+                    writer.writerow(row)
+                    yield flush()
+            finally:
+                conn.close()
+
+        filename = f"outlet-monitor-{datetime.now(timezone.utc):%Y-%m-%d}.csv"
+        return Response(
+            generate(),
+            mimetype="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     return app
 

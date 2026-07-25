@@ -1,3 +1,5 @@
+import csv
+import io
 from datetime import datetime, timezone
 
 import pytest
@@ -5,6 +7,7 @@ import pytest
 import outlet_monitor.api as api_module
 from outlet_monitor.models import ProductSnapshot
 from outlet_monitor.scrape import ScrapeError
+from outlet_monitor.storage import COLUMNS
 
 
 def make_snapshot(**overrides) -> ProductSnapshot:
@@ -197,6 +200,44 @@ def test_list_categories_returns_counts(client, monkeypatch):
     assert resp.status_code == 200
     body = {row["category"]: row["product_count"] for row in resp.get_json()}
     assert body == {"ThinkPad": 1, "IdeaPad": 2}
+
+
+def test_export_csv_returns_every_snapshot_ever_recorded(client, monkeypatch):
+    monkeypatch.setattr(
+        api_module,
+        "fetch_all_products",
+        lambda: [make_snapshot(timestamp=datetime(2026, 7, 19, tzinfo=timezone.utc), sale_price=2252.92)],
+    )
+    client.post("/scrape")
+    monkeypatch.setattr(
+        api_module,
+        "fetch_all_products",
+        lambda: [make_snapshot(timestamp=datetime(2026, 7, 20, tzinfo=timezone.utc), sale_price=2100.00)],
+    )
+    client.post("/scrape")
+
+    resp = client.get("/export.csv")
+
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/csv"
+    rows = list(csv.reader(io.StringIO(resp.get_data(as_text=True).lstrip("\ufeff"))))
+    assert rows[0] == list(COLUMNS)
+    assert [row[COLUMNS.index("sale_price")] for row in rows[1:]] == ["2252.92", "2100.0"]
+
+
+def test_export_csv_is_a_download_with_a_dated_filename(client):
+    resp = client.get("/export.csv")
+
+    disposition = resp.headers["Content-Disposition"]
+    assert disposition.startswith("attachment;")
+    assert f"outlet-monitor-{datetime.now(timezone.utc):%Y-%m-%d}.csv" in disposition
+
+
+def test_export_csv_is_empty_apart_from_the_header_with_no_data(client):
+    resp = client.get("/export.csv")
+
+    rows = list(csv.reader(io.StringIO(resp.get_data(as_text=True).lstrip("\ufeff"))))
+    assert rows == [list(COLUMNS)]
 
 
 def test_cors_header_present(client):

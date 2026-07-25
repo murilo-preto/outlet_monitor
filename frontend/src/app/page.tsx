@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { CategoryTabs } from "@/components/CategoryTabs";
+import { ExportButton } from "@/components/ExportButton";
 import { ProductCarousel } from "@/components/ProductCarousel";
 import { ProductDetail } from "@/components/ProductDetail";
 import { ProductsTable } from "@/components/ProductsTable";
@@ -72,6 +73,7 @@ export default function Home() {
           <span className="hidden sm:inline">Alertas no Telegram</span>
           <span className="sm:hidden">Alertas</span>
         </Link>
+        <ExportButton />
         <ScrapeButton onDone={loadOverview} />
       </SiteHeader>
 
