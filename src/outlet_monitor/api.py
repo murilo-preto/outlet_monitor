@@ -196,22 +196,30 @@ def _perform_scrape(app: Flask, trigger: str) -> dict:
         _record_failure(app, started_at, trigger, str(exc))
         raise
 
-    conn = connect(app.config["DB_PATH"])
+    # Persistence failures are recorded too, not just failures to fetch: a
+    # locked database is the realistic way this breaks (see
+    # storage._apply_pragmas), and "we reached Lenovo but stored nothing" is
+    # every bit as much a gap in the history as never reaching them.
     try:
-        written = append_snapshots(conn, products)
-        changes = changes_since_previous(conn)
-        finished_at = datetime.now(timezone.utc)
-        record_scrape_run(
-            conn,
-            started_at=started_at.isoformat(),
-            finished_at=finished_at.isoformat(),
-            status="ok",
-            trigger=trigger,
-            products_fetched=len(products),
-            rows_written=written,
-        )
-    finally:
-        conn.close()
+        conn = connect(app.config["DB_PATH"])
+        try:
+            written = append_snapshots(conn, products)
+            changes = changes_since_previous(conn)
+            finished_at = datetime.now(timezone.utc)
+            record_scrape_run(
+                conn,
+                started_at=started_at.isoformat(),
+                finished_at=finished_at.isoformat(),
+                status="ok",
+                trigger=trigger,
+                products_fetched=len(products),
+                rows_written=written,
+            )
+        finally:
+            conn.close()
+    except Exception as exc:
+        _record_failure(app, started_at, trigger, f"{type(exc).__name__}: {exc}")
+        raise
 
     # Handed to a background thread: the notifier is not on the critical path
     # of a scrape, so this never waits on Telegram.
@@ -226,20 +234,29 @@ def _perform_scrape(app: Flask, trigger: str) -> dict:
 
 
 def _record_failure(app: Flask, started_at: datetime, trigger: str, error: str) -> None:
-    """Persist a failed run and alert the operator once per outage streak."""
-    conn = connect(app.config["DB_PATH"])
+    """Persist a failed run and alert the operator once per outage streak.
+
+    Never raises: on the persistence path the database is itself what failed,
+    and losing the record of that must not also replace the original error with
+    a less informative one (a 502 "stale pageFilterId" becoming a 500, say).
+    """
     try:
-        record_scrape_run(
-            conn,
-            started_at=started_at.isoformat(),
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            status="failed",
-            trigger=trigger,
-            error=error,
-        )
-        failures = count_consecutive_failures(conn)
-    finally:
-        conn.close()
+        conn = connect(app.config["DB_PATH"])
+        try:
+            record_scrape_run(
+                conn,
+                started_at=started_at.isoformat(),
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                status="failed",
+                trigger=trigger,
+                error=error,
+            )
+            failures = count_consecutive_failures(conn)
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("could not record the failed scrape run")
+        return
 
     # Equality, not >=: an outage lasting a week should produce one message,
     # not one per scrape for a week.

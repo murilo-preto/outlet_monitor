@@ -101,12 +101,6 @@ def is_subscribed(chat_id: int, db_path: Path = DEFAULT_DB_PATH) -> bool:
     return row is not None
 
 
-def list_subscribers(db_path: Path = DEFAULT_DB_PATH) -> list[int]:
-    with _connect(db_path) as conn:
-        rows = conn.execute("SELECT chat_id FROM subscribers ORDER BY created_at").fetchall()
-    return [row[0] for row in rows]
-
-
 def count_subscribers(db_path: Path = DEFAULT_DB_PATH) -> int:
     with _connect(db_path) as conn:
         return conn.execute("SELECT COUNT(*) FROM subscribers").fetchone()[0]

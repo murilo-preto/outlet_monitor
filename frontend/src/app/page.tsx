@@ -63,11 +63,14 @@ export default function Home() {
   const loadOverview = useCallback(async () => {
     setError(null);
     try {
-      // Status rides along here so the ScrapeButton's onDone refreshes it too.
+      // Status rides along here so the ScrapeButton's onDone refreshes it too,
+      // but it must never be able to fail the page: it is a decorative
+      // freshness line, and an API too old to serve /status (or a rolling
+      // deploy mid-flight) would otherwise blank out products that loaded fine.
       const [cats, products, scrapeStatus] = await Promise.all([
         getCategories(),
         getProducts(),
-        getStatus(),
+        getStatus().catch(() => null),
       ]);
       setCategories(cats);
       setAllProducts(products);

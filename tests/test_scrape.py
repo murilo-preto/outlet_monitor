@@ -1,7 +1,16 @@
 from datetime import datetime, timezone
 
+import pytest
+import requests
+
 import outlet_monitor.scrape as scrape_module
-from outlet_monitor.scrape import _build_url, _infer_category, _parse_product, fetch_all_products
+from outlet_monitor.scrape import (
+    ScrapeError,
+    _build_url,
+    _infer_category,
+    _parse_product,
+    fetch_all_products,
+)
 
 RAW_PRODUCT = {
     "id": "82X5X00900_64c9a7c6b7468-4a6c-b2f7-695ca23a0803",
@@ -112,6 +121,67 @@ def test_fetch_all_products_shares_one_timestamp_across_pages(monkeypatch):
     products = fetch_all_products()
 
     assert len({p.timestamp for p in products}) == 1
+
+
+def test_fetch_raw_page_sends_the_headers_the_edge_waf_requires():
+    # Lenovo's edge sits behind an openresty WAF that checks User-Agent and
+    # Referer (PLAN.md Phase 0). Dropping either turns every scrape into a
+    # rejection, so the headers and the timeout are pinned here.
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": 200}
+
+    class FakeSession:
+        def get(self, url, headers=None, timeout=None):
+            captured.update(url=url, headers=headers, timeout=timeout)
+            return FakeResponse()
+
+    scrape_module._fetch_raw_page(FakeSession(), 1)
+
+    assert captured["timeout"] == 15
+    assert "Mozilla/5.0" in captured["headers"]["User-Agent"]
+    assert captured["headers"]["Referer"] == scrape_module.LISTING_PAGE_URL
+    assert captured["headers"]["Accept-Language"] == "pt-BR"
+
+
+def test_fetch_all_products_treats_an_empty_result_set_as_a_failure(monkeypatch):
+    # PLAN.md's top risk: when PAGE_FILTER_ID/CLASSIFICATION_GROUP_IDS go
+    # stale, Lenovo answers 200 with zero products rather than an error. If
+    # that were ever treated as "the outlet is empty today", every tracked
+    # product would silently look delisted and the history would rot.
+    _fake_pages([[]], monkeypatch)
+
+    with pytest.raises(ScrapeError, match="zero products"):
+        fetch_all_products()
+
+
+def test_fetch_all_products_rejects_a_non_200_status_payload(monkeypatch):
+    # The HTTP response is 200; the failure is inside the JSON body, so
+    # raise_for_status() never sees it.
+    def fake_fetch(_session, page: int) -> dict:
+        return {"status": 500, "msg": "internal error"}
+
+    monkeypatch.setattr(scrape_module, "_fetch_raw_page", fake_fetch)
+
+    with pytest.raises(ScrapeError, match="non-200 status payload"):
+        fetch_all_products()
+
+
+def test_fetch_all_products_does_not_swallow_transport_errors(monkeypatch):
+    # A timeout mid-pagination must abort the run rather than persisting a
+    # partial catalogue, which would read as a mass delisting.
+    def fake_fetch(_session, page: int) -> dict:
+        raise requests.Timeout("read timed out")
+
+    monkeypatch.setattr(scrape_module, "_fetch_raw_page", fake_fetch)
+
+    with pytest.raises(requests.Timeout):
+        fetch_all_products()
 
 
 def test_build_url_double_encodes_page_number():

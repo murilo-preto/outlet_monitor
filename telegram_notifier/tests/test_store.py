@@ -104,6 +104,17 @@ def test_remember_lines_prefers_the_supplied_category(db):
     assert store.remember_lines([Change()], db) == ["V Series"]
 
 
+def test_remember_lines_falls_back_to_the_leading_name_token(db):
+    class Change:
+        # No category supplied, and "Legion" is not yet known — the leading
+        # token is the only signal available.
+        category = None
+        name = "Legion 5i Intel Core i7"
+
+    assert store.remember_lines([Change()], db) == ["Legion"]
+    assert "Legion" in store.known_lines(db)
+
+
 def test_remember_lines_ignores_a_leading_word_that_is_not_a_line(db):
     class Change:
         category = None

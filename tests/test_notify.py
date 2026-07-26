@@ -180,6 +180,36 @@ def test_send_admin_alert_is_disabled_by_an_empty_notifier_url(monkeypatch):
     assert notify.send_admin_alert("coleta falhou") is False
 
 
+def test_send_admin_alert_async_runs_in_a_background_thread(monkeypatch):
+    seen = {}
+
+    def fake_post(url, json=None, timeout=None):
+        seen["thread"] = __import__("threading").current_thread().name
+        return FakeResponse()
+
+    monkeypatch.setattr(notify.requests, "post", fake_post)
+    monkeypatch.delenv("NOTIFIER_URL", raising=False)
+
+    thread = notify.send_admin_alert_async("coleta falhou")
+    thread.join(timeout=5)
+
+    # Fired from the scrape path, so it must never block the caller.
+    assert seen["thread"] == "notify-admin-alert"
+    assert not thread.is_alive()
+
+
+def test_post_swallows_a_non_request_exception(monkeypatch):
+    # The belt-and-braces branch: anything at all going wrong in delivery is
+    # still not worth losing a scrape over.
+    def fake_post(url, json=None, timeout=None):
+        raise ValueError("something unexpected")
+
+    monkeypatch.setattr(notify.requests, "post", fake_post)
+    monkeypatch.delenv("NOTIFIER_URL", raising=False)
+
+    assert notify.send_admin_alert("coleta falhou") is False
+
+
 def test_send_price_changes_swallows_unexpected_errors(monkeypatch):
     monkeypatch.setattr(notify.requests, "post", lambda *a, **kw: FakeResponse())
 

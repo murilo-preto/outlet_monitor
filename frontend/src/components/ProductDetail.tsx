@@ -11,6 +11,7 @@ import { SpecsTable } from "./SpecsTable";
 import { getProductHistory } from "@/lib/api";
 import { getCategoryStyle } from "@/lib/categoryStyles";
 import { formatBRL, formatDays } from "@/lib/format";
+import { specsSummary } from "@/lib/specsSummary";
 import type { Product } from "@/lib/types";
 
 interface ProductDetailProps {
@@ -109,10 +110,14 @@ function ProductDetailContent({ product }: { product: Product }) {
           <PriceHistoryChart history={history} />
         </div>
 
-        <div className="flex flex-col gap-3">
-          <h3 className="text-sm font-medium text-ink-secondary">Especificações</h3>
-          <SpecsTable product={product} />
-        </div>
+        {/* Guarded here rather than inside SpecsTable, so a product with
+            nothing to show renders no heading either. */}
+        {(product.specs.length > 0 || specsSummary(product).length > 0) && (
+          <div className="flex flex-col gap-3">
+            <h3 className="text-sm font-medium text-ink-secondary">Especificações</h3>
+            <SpecsTable product={product} />
+          </div>
+        )}
       </div>
     </motion.div>
   );

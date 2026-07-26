@@ -369,6 +369,41 @@ def test_failed_scrape_still_returns_502_and_records_the_failure(client, monkeyp
     assert body["consecutive_failures"] == 1
 
 
+def test_a_database_write_failure_is_recorded_as_a_failed_run(client, monkeypatch):
+    monkeypatch.setattr(api_module, "fetch_all_products", lambda: [make_snapshot()])
+
+    def raise_locked(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(api_module, "append_snapshots", raise_locked)
+
+    # Reaching Lenovo but storing nothing is as much a hole in the history as
+    # never reaching them, so it has to show up in /status too.
+    with pytest.raises(sqlite3.OperationalError):
+        client.post("/scrape")
+
+    body = client.get("/status").get_json()
+    assert body["last_run"]["status"] == "failed"
+    assert "database is locked" in body["last_run"]["error"]
+    assert body["consecutive_failures"] == 1
+
+
+def test_recording_a_failure_never_masks_the_original_error(client, monkeypatch):
+    def raise_scrape_error():
+        raise ScrapeError("stale pageFilterId")
+
+    monkeypatch.setattr(api_module, "fetch_all_products", raise_scrape_error)
+
+    def unusable_db(*_args, **_kwargs):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(api_module, "record_scrape_run", unusable_db)
+
+    # The caller still learns the real problem (502, stale filter id) rather
+    # than a 500 about the bookkeeping that failed while reporting it.
+    assert client.post("/scrape").status_code == 502
+
+
 def test_status_flags_stale_data(client, monkeypatch):
     conn = connect(client.application.config["DB_PATH"])
     try:

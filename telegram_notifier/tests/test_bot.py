@@ -113,6 +113,31 @@ def test_produtos_requires_a_subscription(db):
     assert chat.messages[0][0] == bot_module.NEED_SUBSCRIPTION
 
 
+def test_produtos_shows_the_filter_menu_to_a_subscriber(db):
+    store.subscribe(1, db_path=db)
+    store.toggle_filter(1, "Yoga", db)
+    chat = FakeChat()
+
+    asyncio.run(bot_module.produtos(FakeUpdate(chat), None))
+
+    text, markup = chat.messages[0]
+    assert text == bot_module.MENU_PROMPT
+    assert "✅ Yoga" in button_labels(markup)
+
+
+def test_unknown_callback_data_is_acknowledged_and_ignored(db):
+    # Stale keyboards from an older deploy can still send data we no longer
+    # recognise; answering keeps Telegram's spinner from hanging.
+    store.subscribe(1, db_path=db)
+    query = FakeQuery("something:unexpected")
+
+    asyncio.run(bot_module.on_menu_click(FakeUpdate(FakeChat(), query), None))
+
+    assert query.answers == [(None, False)]
+    assert query.edited_markup is False
+    assert store.get_filters(1, db) == []
+
+
 def test_ajuda_reflects_subscription_state(db):
     chat = FakeChat()
 
@@ -195,8 +220,41 @@ def test_identical_keyboard_edit_is_swallowed(db):
     assert store.get_filters(1, db) == ["Yoga"]
 
 
+def test_ajuda_says_you_get_everything_when_no_filters_are_set(db):
+    store.subscribe(1, db_path=db)
+    chat = FakeChat()
+
+    asyncio.run(bot_module.ajuda(FakeUpdate(chat), None))
+
+    assert "todos</b> os produtos" in chat.messages[0][0]
+
+
+def test_handlers_ignore_an_update_with_no_chat(db):
+    # Defensive: PTB types make effective_chat optional, and a handler raising
+    # here would surface as an unhandled error in the polling loop.
+    for handler in (bot_module.start, bot_module.parar, bot_module.produtos, bot_module.ajuda):
+        asyncio.run(handler(FakeUpdate(None), None))
+
+    assert store.count_subscribers(db) == 0
+
+
 def test_build_application_requires_a_token(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
 
     with pytest.raises(RuntimeError, match="TELEGRAM_BOT_TOKEN"):
         bot_module.build_application()
+
+
+def test_build_application_registers_every_handler(monkeypatch):
+    # No network: the builder only parses the token. Worth pinning because a
+    # broken registration here fails at deploy, not at import.
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:test-token")
+
+    application = bot_module.build_application()
+    handlers = application.handlers[0]
+
+    assert len(handlers) == 6
+    # The catch-all for unknown commands must stay last, or it swallows the
+    # real commands registered after it.
+    assert handlers[-1].callback is bot_module.unknown
+    assert application.bot.defaults.parse_mode == "HTML"
