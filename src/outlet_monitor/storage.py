@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from outlet_monitor import deals
+from outlet_monitor import specs as specs_parser
 from outlet_monitor.models import ProductSnapshot
 
 DEFAULT_DB_PATH = Path("data/price_history.db")
@@ -24,9 +25,26 @@ CREATE TABLE IF NOT EXISTS price_history (
     raw_specs TEXT NOT NULL,
     category TEXT NOT NULL DEFAULT 'Other',
     image_url TEXT NOT NULL DEFAULT '',
-    specs TEXT NOT NULL DEFAULT '[]'
+    specs TEXT NOT NULL DEFAULT '[]',
+    ram_gb INTEGER,
+    storage_gb INTEGER,
+    screen_in REAL,
+    cpu_brand TEXT,
+    cpu_model TEXT,
+    gpu_discrete INTEGER
 );
 """
+
+# Records what produced the derived columns, so a corrected parser can re-run
+# over history. A plain key/value table rather than user_version, which is a
+# single int already spoken for by convention.
+CREATE_META_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS schema_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+"""
+SPECS_VERSION_KEY = "specs_parser_version"
 
 # Indexes are created after migrations run, since they reference columns that
 # may not exist yet on a pre-existing db file.
@@ -74,16 +92,26 @@ WHERE id NOT IN (SELECT MIN(id) FROM price_history GROUP BY timestamp, product_i
 # Columns added after the initial release: (name, ALTER-COLUMN-DEF). Applied to
 # any pre-existing db file that predates them, so older data/price_history.db
 # volumes don't break on the new INSERT/SELECT column lists.
+# The derived spec columns are deliberately nullable with no default, unlike
+# the three above: a value the parser could not read must come back as NULL, so
+# a "16 GB or more" filter excludes it. A NOT NULL DEFAULT 0 would instead make
+# every unparsed machine look like it has no memory.
 _MIGRATIONS = (
     ("category", "TEXT NOT NULL DEFAULT 'Other'"),
     ("image_url", "TEXT NOT NULL DEFAULT ''"),
     ("specs", "TEXT NOT NULL DEFAULT '[]'"),
+    ("ram_gb", "INTEGER"),
+    ("storage_gb", "INTEGER"),
+    ("screen_in", "REAL"),
+    ("cpu_brand", "TEXT"),
+    ("cpu_model", "TEXT"),
+    ("gpu_discrete", "INTEGER"),
 )
 
 INSERT_SQL = """
 INSERT OR IGNORE INTO price_history
-    (timestamp, product_id, sku, name, url, list_price, sale_price, discount_pct, condition, availability, raw_specs, category, image_url, specs)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (timestamp, product_id, sku, name, url, list_price, sale_price, discount_pct, condition, availability, raw_specs, category, image_url, specs, ram_gb, storage_gb, screen_in, cpu_brand, cpu_model, gpu_discrete)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 COLUMNS = (
@@ -102,6 +130,7 @@ COLUMNS = (
     "category",
     "image_url",
     "specs",
+    *specs_parser.PARSED_FIELDS,
 )
 _SELECT_COLUMNS = ", ".join(COLUMNS)
 _SELECT_COLUMNS_PH = ", ".join(f"ph.{col}" for col in COLUMNS)
@@ -237,13 +266,63 @@ def _apply_pragmas(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA busy_timeout=10000")
 
 
+_BACKFILL_SELECT_SQL = "SELECT id, specs FROM price_history"
+_BACKFILL_UPDATE_SQL = (
+    "UPDATE price_history SET "
+    + ", ".join(f"{field} = ?" for field in specs_parser.PARSED_FIELDS)
+    + " WHERE id = ?"
+)
+
+
+def _meta_get(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM schema_meta WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def _meta_set(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO schema_meta (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+
+
+def _ensure_parsed_specs(conn: sqlite3.Connection) -> None:
+    """Re-derive the spec columns for every row whenever the parser changes.
+
+    Guarded on a stored version rather than on "have these columns any values
+    yet", the way _ensure_unique_snapshot_index guards on the index existing.
+    That guard is right for a dedup sweep, which is idempotent and final; these
+    are regexes over vendor free text and *will* be corrected. Bumping
+    specs.PARSER_VERSION replays the fix across history on the next deploy.
+
+    Cost is one full rewrite of the table on the first connection after a bump
+    — trivial at this size (~900 rows), and it happens inside connect() while
+    holding a write lock. Past ~100k rows this should move out of connect() and
+    behind an explicit call in api.__main__.
+    """
+    stored = _meta_get(conn, SPECS_VERSION_KEY)
+    if stored is not None and int(stored) >= specs_parser.PARSER_VERSION:
+        return
+
+    rows = conn.execute(_BACKFILL_SELECT_SQL).fetchall()
+    conn.executemany(
+        _BACKFILL_UPDATE_SQL,
+        [(*_parsed_columns(json.loads(specs or "[]")), row_id) for row_id, specs in rows],
+    )
+    _meta_set(conn, SPECS_VERSION_KEY, str(specs_parser.PARSER_VERSION))
+    conn.commit()
+
+
 def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     _apply_pragmas(conn)
     conn.executescript(CREATE_TABLE_SQL)
+    conn.executescript(CREATE_META_TABLE_SQL)
     _apply_migrations(conn)
+    _ensure_parsed_specs(conn)
     conn.executescript(CREATE_INDEXES_SQL)
     _ensure_unique_snapshot_index(conn)
     return conn
@@ -278,6 +357,12 @@ def append_snapshots(conn: sqlite3.Connection, snapshots: list[ProductSnapshot])
                 s.category,
                 s.image_url,
                 json.dumps(s.specs, ensure_ascii=False),
+                # Parsed here rather than in the scraper: ProductSnapshot stays
+                # a faithful record of what the API returned, and a corrected
+                # regex can be replayed over stored rows (see
+                # _ensure_parsed_specs) instead of needing a re-scrape that
+                # could never recover history.
+                *_parsed_columns(s.specs),
             )
             for s in valid
         ],
@@ -286,9 +371,18 @@ def append_snapshots(conn: sqlite3.Connection, snapshots: list[ProductSnapshot])
     return conn.total_changes - before
 
 
+def _parsed_columns(specs: list[dict[str, str]]) -> tuple:
+    parsed = specs_parser.parse_specs(specs)
+    return tuple(getattr(parsed, field) for field in specs_parser.PARSED_FIELDS)
+
+
 def _row_to_dict(row: tuple) -> dict:
     result = dict(zip(COLUMNS, row))
     result["specs"] = json.loads(result["specs"])
+    # sqlite has no bool type: hand JSON consumers True/False/None rather than
+    # 1/0/None, so the "unknown" case stays distinguishable from "integrated".
+    if result["gpu_discrete"] is not None:
+        result["gpu_discrete"] = bool(result["gpu_discrete"])
     return result
 
 

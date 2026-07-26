@@ -10,10 +10,17 @@ import { CategoryTabs } from "@/components/CategoryTabs";
 import { ExportButton } from "@/components/ExportButton";
 import { ProductCarousel } from "@/components/ProductCarousel";
 import { ProductDetail } from "@/components/ProductDetail";
+import { ProductFilters } from "@/components/ProductFilters";
 import { ProductsTable } from "@/components/ProductsTable";
 import { ScrapeButton } from "@/components/ScrapeButton";
 import { SiteHeader } from "@/components/SiteHeader";
 import { getCategories, getProducts } from "@/lib/api";
+import {
+  DEFAULT_FILTERS,
+  applyFilters,
+  filterOptions,
+  type ProductFilters as ProductFilterState,
+} from "@/lib/productFilter";
 import type { CategoryCount, Product } from "@/lib/types";
 
 export default function Home() {
@@ -21,6 +28,7 @@ export default function Home() {
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+  const [filters, setFilters] = useState<ProductFilterState>(DEFAULT_FILTERS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,8 +44,19 @@ export default function Home() {
         : allProducts.filter((p) => p.category === selectedCategory),
     [allProducts, selectedCategory]
   );
+
+  const visibleProducts = useMemo(
+    () => applyFilters(categoryProducts, filters),
+    [categoryProducts, filters]
+  );
+  // Options come from the whole category, not the filtered set, so narrowing
+  // one filter never removes the choices you would use to widen it again.
+  const options = useMemo(() => filterOptions(categoryProducts), [categoryProducts]);
+
+  // Falls back within the *visible* set: otherwise the detail panel keeps
+  // showing a product the user just filtered away.
   const selectedProduct =
-    categoryProducts.find((p) => p.product_id === selectedProductId) ?? categoryProducts[0] ?? null;
+    visibleProducts.find((p) => p.product_id === selectedProductId) ?? visibleProducts[0] ?? null;
 
   const loadOverview = useCallback(async () => {
     setError(null);
@@ -107,15 +126,22 @@ export default function Home() {
           <>
             <section className="flex flex-col gap-4">
               <CategoryTabs categories={categories} selected={selectedCategory} onSelect={setSelectedCategory} />
+              <ProductFilters
+                filters={filters}
+                options={options}
+                onChange={setFilters}
+                matchCount={visibleProducts.length}
+                totalCount={categoryProducts.length}
+              />
               <ProductCarousel
-                products={categoryProducts}
+                products={visibleProducts}
                 selectedId={selectedProduct?.product_id ?? null}
                 onSelect={(product) => setSelectedProductId(product.product_id)}
               />
             </section>
 
             <BestDeals
-              products={categoryProducts}
+              products={visibleProducts}
               selectedId={selectedProduct?.product_id ?? null}
               onSelect={(product) => setSelectedProductId(product.product_id)}
             />
@@ -124,7 +150,7 @@ export default function Home() {
 
             <section className="flex flex-col gap-4">
               <h2 className="text-lg font-semibold text-ink">Produtos disponíveis no outlet</h2>
-              <ProductsTable products={categoryProducts} />
+              <ProductsTable products={visibleProducts} />
             </section>
           </>
         )}

@@ -14,6 +14,14 @@ export interface Product {
   category: string;
   image_url: string;
   specs: { label: string; value: string }[];
+  // Derived from `specs` server-side. null means the parser could not read the
+  // value — treat as unknown, never as zero.
+  ram_gb: number | null;
+  storage_gb: number | null;
+  screen_in: number | null;
+  cpu_brand: string | null;
+  cpu_model: string | null;
+  gpu_discrete: boolean | null;
   lowest_price: number;
   highest_price: number;
   currently_listed: boolean;

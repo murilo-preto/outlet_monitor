@@ -109,12 +109,10 @@ function ProductDetailContent({ product }: { product: Product }) {
           <PriceHistoryChart history={history} />
         </div>
 
-        {product.specs.length > 0 && (
-          <div className="flex flex-col gap-3">
-            <h3 className="text-sm font-medium text-ink-secondary">Especificações</h3>
-            <SpecsTable specs={product.specs} />
-          </div>
-        )}
+        <div className="flex flex-col gap-3">
+          <h3 className="text-sm font-medium text-ink-secondary">Especificações</h3>
+          <SpecsTable product={product} />
+        </div>
       </div>
     </motion.div>
   );

@@ -4,9 +4,12 @@ from datetime import datetime, timezone
 import pytest
 
 from outlet_monitor.models import ProductSnapshot
+from outlet_monitor import specs as specs_parser
 from outlet_monitor.storage import (
     CREATE_TABLE_SQL,
     LATEST_SNAPSHOT_SQL,
+    SPECS_VERSION_KEY,
+    _meta_get,
     append_snapshots,
     changes_since_previous,
     connect,
@@ -135,6 +138,88 @@ def test_latest_snapshot_query_uses_the_covering_index(conn):
     # The whole point of the composite index is that both GROUP BY subqueries
     # resolve without touching the main table.
     assert plan.count("COVERING INDEX idx_price_history_pid_ts_price") == 2
+
+
+def test_append_snapshots_stores_the_parsed_specs(conn):
+    append_snapshots(
+        conn,
+        [
+            make_snapshot(
+                specs=[
+                    {"label": "Memória", "value": "8GB Soldered DDR4-3200 + 8GB SODIMM DDR4-3200"},
+                    {"label": "Armazenamento", "value": "1TB SSD M.2 2242 PCIe® 4.0x4 NVMe®"},
+                    {"label": "Tela", "value": '15,6" FHD (1920 x 1080), TN'},
+                    {"label": "Processador", "value": "Intel Core™ i5-13420H, 8C"},
+                    {"label": "Placa de Vídeo", "value": "NVIDIA® GeForce RTX™ 4050 6GB GDDR6"},
+                ]
+            )
+        ],
+    )
+
+    row = get_latest_snapshots(conn)[0]
+
+    assert (row["ram_gb"], row["storage_gb"], row["screen_in"]) == (16, 1024, 15.6)
+    assert (row["cpu_brand"], row["cpu_model"]) == ("Intel", "i5-13420H")
+    # sqlite stores this as an integer; readers must see a real bool.
+    assert row["gpu_discrete"] is True
+
+
+def test_append_snapshots_stores_null_for_unparseable_specs(conn):
+    append_snapshots(conn, [make_snapshot(specs=[{"label": "Memória", "value": "sob consulta"}])])
+
+    row = get_latest_snapshots(conn)[0]
+
+    # NULL, not 0 — the difference decides whether a "16 GB or more" filter
+    # excludes this row or treats it as a machine with no memory.
+    assert row["ram_gb"] is None
+    assert row["gpu_discrete"] is None
+
+
+def test_connect_backfills_parsed_specs_for_rows_written_before_the_columns(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    legacy = sqlite3_connect_without_new_columns(db_path)
+    legacy.execute(
+        "INSERT INTO price_history "
+        "(timestamp, product_id, sku, name, url, list_price, sale_price, discount_pct, condition, availability, raw_specs) "
+        "VALUES ('2026-07-19T00:00:00+00:00', 'legacy1', 'sku1', 'Old', 'https://x', 100.0, 90.0, 10.0, 'New', 'Available', '')"
+    )
+    legacy.commit()
+    legacy.close()
+
+    # The legacy row predates the `specs` column entirely, so it backfills from
+    # the '[]' default and lands on NULLs rather than erroring.
+    conn = connect(db_path)
+    try:
+        assert get_latest_snapshots(conn)[0]["ram_gb"] is None
+        assert _meta_get(conn, SPECS_VERSION_KEY) == str(specs_parser.PARSER_VERSION)
+    finally:
+        conn.close()
+
+
+def test_connect_replays_the_backfill_when_the_parser_version_is_bumped(tmp_path, monkeypatch):
+    db_path = tmp_path / "price_history.db"
+    conn = connect(db_path)
+    append_snapshots(
+        conn,
+        [make_snapshot(specs=[{"label": "Memória", "value": "16GB"}])],
+    )
+    # Corrupt a parsed value by hand to prove the backfill actually reran.
+    conn.execute("UPDATE price_history SET ram_gb = 999")
+    conn.commit()
+    conn.close()
+
+    # Same version: the wrong value survives, so no full-table rewrite happened.
+    conn = connect(db_path)
+    assert conn.execute("SELECT ram_gb FROM price_history").fetchone()[0] == 999
+    conn.close()
+
+    monkeypatch.setattr(specs_parser, "PARSER_VERSION", specs_parser.PARSER_VERSION + 1)
+    conn = connect(db_path)
+    try:
+        # A corrected regex reaches history without a re-scrape.
+        assert conn.execute("SELECT ram_gb FROM price_history").fetchone()[0] == 16
+    finally:
+        conn.close()
 
 
 def test_append_snapshots_writes_rows(conn):
@@ -580,6 +665,15 @@ def test_connect_migrates_pre_category_schema(tmp_path):
             "category": "Other",
             "image_url": "",
             "specs": [],
+            # Nothing to parse, so every derived spec is NULL rather than 0 —
+            # a "16 GB or more" filter must exclude this row, not treat it as
+            # a machine with no memory.
+            "ram_gb": None,
+            "storage_gb": None,
+            "screen_in": None,
+            "cpu_brand": None,
+            "cpu_model": None,
+            "gpu_discrete": None,
             "lowest_price": 90.0,
             "highest_price": 90.0,
             "snapshot_count": 1,

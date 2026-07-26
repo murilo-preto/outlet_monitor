@@ -12,16 +12,44 @@ interface ProductsTableProps {
   products: Product[];
 }
 
-type SortKey = "sale_price" | "lowest_price" | "highest_price" | "discount_pct" | "deal_score";
+type SortKey =
+  | "sale_price"
+  | "lowest_price"
+  | "highest_price"
+  | "discount_pct"
+  | "deal_score"
+  | "ram_gb"
+  | "storage_gb";
 type SortDirection = "asc" | "desc";
 
 const SORT_COLUMNS: { key: SortKey; label: string }[] = [
+  { key: "ram_gb", label: "RAM" },
+  { key: "storage_gb", label: "Disco" },
   { key: "sale_price", label: "Preço atual" },
   { key: "lowest_price", label: "Menor preço" },
   { key: "highest_price", label: "Maior preço" },
   { key: "discount_pct", label: "Desconto" },
   { key: "deal_score", label: "Oferta" },
 ];
+
+/**
+ * Sorts nulls to the end regardless of direction.
+ *
+ * ram_gb and storage_gb are nullable, and the obvious `(a[key] - b[key]) * sign`
+ * yields NaN for those rows — which every comparison treats as false, leaving
+ * the array in an arbitrary order rather than merely misplacing the nulls.
+ */
+function compareBy(key: SortKey, direction: SortDirection) {
+  const sign = direction === "asc" ? 1 : -1;
+  return (a: Product, b: Product): number => {
+    const left = a[key];
+    const right = b[key];
+    if (left === null && right === null) return 0;
+    if (left === null) return 1;
+    if (right === null) return -1;
+    return (left - right) * sign;
+  };
+}
 
 export function ProductsTable({ products }: ProductsTableProps) {
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
@@ -37,10 +65,10 @@ export function ProductsTable({ products }: ProductsTableProps) {
   }
 
   const available = useMemo(() => {
+    // filter() returns a fresh array, so the in-place sort never touches the prop.
     const listed = products.filter((p) => p.currently_listed);
     if (sortKey) {
-      const sign = sortDirection === "asc" ? 1 : -1;
-      return listed.sort((a, b) => (a[sortKey] - b[sortKey]) * sign);
+      return listed.sort(compareBy(sortKey, sortDirection));
     }
     return listed.sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
   }, [products, sortKey, sortDirection]);
@@ -103,6 +131,16 @@ export function ProductsTable({ products }: ProductsTableProps) {
                     <span className={`h-1.5 w-1.5 rounded-full ${style.dotClassName}`} />
                     {product.category}
                   </span>
+                </td>
+                <td className="px-4 py-3 text-right whitespace-nowrap text-ink-muted">
+                  {product.ram_gb !== null ? `${product.ram_gb} GB` : "—"}
+                </td>
+                <td className="px-4 py-3 text-right whitespace-nowrap text-ink-muted">
+                  {product.storage_gb === null
+                    ? "—"
+                    : product.storage_gb >= 1024
+                      ? `${product.storage_gb / 1024} TB`
+                      : `${product.storage_gb} GB`}
                 </td>
                 <td className={`px-4 py-3 text-right font-medium whitespace-nowrap ${currentColor}`}>
                   {formatBRL(product.sale_price)}
