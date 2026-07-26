@@ -12,7 +12,7 @@ interface ProductsTableProps {
   products: Product[];
 }
 
-type SortKey = "sale_price" | "lowest_price" | "highest_price" | "discount_pct";
+type SortKey = "sale_price" | "lowest_price" | "highest_price" | "discount_pct" | "deal_score";
 type SortDirection = "asc" | "desc";
 
 const SORT_COLUMNS: { key: SortKey; label: string }[] = [
@@ -20,6 +20,7 @@ const SORT_COLUMNS: { key: SortKey; label: string }[] = [
   { key: "lowest_price", label: "Menor preço" },
   { key: "highest_price", label: "Maior preço" },
   { key: "discount_pct", label: "Desconto" },
+  { key: "deal_score", label: "Oferta" },
 ];
 
 export function ProductsTable({ products }: ProductsTableProps) {
@@ -114,6 +115,13 @@ export function ProductsTable({ products }: ProductsTableProps) {
                 </td>
                 <td className="px-4 py-3 text-right whitespace-nowrap text-ink-muted">
                   {product.discount_pct > 0 ? `${Math.round(product.discount_pct)}%` : "—"}
+                </td>
+                <td className="px-4 py-3 text-right whitespace-nowrap">
+                  {product.deal_score > 0 ? (
+                    <span className="font-medium text-good">{product.deal_score}</span>
+                  ) : (
+                    <span className="text-ink-muted">—</span>
+                  )}
                 </td>
               </tr>
             );

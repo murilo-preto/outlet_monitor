@@ -5,6 +5,7 @@ import { BellRing } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { BestDeals } from "@/components/BestDeals";
 import { CategoryTabs } from "@/components/CategoryTabs";
 import { ExportButton } from "@/components/ExportButton";
 import { ProductCarousel } from "@/components/ProductCarousel";
@@ -112,6 +113,12 @@ export default function Home() {
                 onSelect={(product) => setSelectedProductId(product.product_id)}
               />
             </section>
+
+            <BestDeals
+              products={categoryProducts}
+              selectedId={selectedProduct?.product_id ?? null}
+              onSelect={(product) => setSelectedProductId(product.product_id)}
+            />
 
             <ProductDetail product={selectedProduct} />
 

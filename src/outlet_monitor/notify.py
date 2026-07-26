@@ -51,6 +51,10 @@ def send_price_changes(changes: list[dict]) -> bool:
                     # "new" / "relisted" / "price". Only we can tell a first
                     # listing from a returning one; the notifier has no history.
                     "event": change.get("event"),
+                    # True/False/None — None meaning "not enough history to
+                    # say". Same reasoning as `event`: the notifier stores no
+                    # prices, so it could never work this out itself.
+                    "all_time_low": change.get("all_time_low"),
                 }
                 for change in changes
             ]

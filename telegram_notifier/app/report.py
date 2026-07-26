@@ -23,15 +23,22 @@ def _event_of(change: PriceChange) -> str:
     return "price" if change.old_price is not None else "new"
 
 
+# Appended to whichever line the change produced. Only ever added when the flag
+# is explicitly True — a None (unknown) must read identically to a plain change,
+# never as a claim that this isn't a low.
+_ALL_TIME_LOW_SUFFIX = " · 🔥 <b>menor preço histórico</b>"
+
+
 def _change_line(change: PriceChange) -> str:
     name = escape(change.name)
     label = f'<a href="{escape(change.url, quote=True)}">{name}</a>' if change.url else f"<b>{name}</b>"
+    record = _ALL_TIME_LOW_SUFFIX if change.all_time_low else ""
 
     event = _event_of(change)
     if event == "relisted":
-        return f"🔁 {label}\n    De volta ao outlet · {format_brl(change.new_price)}"
+        return f"🔁 {label}\n    De volta ao outlet · {format_brl(change.new_price)}{record}"
     if event == "new" or change.old_price is None:
-        return f"🆕 {label}\n    {format_brl(change.new_price)}"
+        return f"🆕 {label}\n    {format_brl(change.new_price)}{record}"
 
     delta = change.new_price - change.old_price
     arrow = "📉" if delta < 0 else "📈"
@@ -42,7 +49,7 @@ def _change_line(change: PriceChange) -> str:
     return (
         f"{arrow} {label}\n"
         f"    <s>{format_brl(change.old_price)}</s> → <b>{format_brl(change.new_price)}</b>"
-        f"  ({sign}{pct_text}% · {sign}{format_brl(abs(delta))})"
+        f"  ({sign}{pct_text}% · {sign}{format_brl(abs(delta))}){record}"
     )
 
 
@@ -52,6 +59,7 @@ def build_messages(payload: NotifyRequest) -> list[str]:
     rises = sum(1 for c in payload.changes if c.old_price is not None and c.new_price > c.old_price)
     news = sum(1 for c in payload.changes if _event_of(c) == "new")
     relisted = sum(1 for c in payload.changes if _event_of(c) == "relisted")
+    lows = sum(1 for c in payload.changes if c.all_time_low)
 
     parts = []
     if drops:
@@ -62,6 +70,8 @@ def build_messages(payload: NotifyRequest) -> list[str]:
         parts.append(f"{news} novo(s)")
     if relisted:
         parts.append(f"{relisted} de volta")
+    if lows:
+        parts.append(f"{lows} no menor preço")
     summary = ", ".join(parts) or f"{len(payload.changes)} atualização(ões)"
 
     title = escape(payload.title) if payload.title else "Alerta de preços — Lenovo Outlet"

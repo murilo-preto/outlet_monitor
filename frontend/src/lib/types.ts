@@ -17,6 +17,14 @@ export interface Product {
   lowest_price: number;
   highest_price: number;
   currently_listed: boolean;
+  snapshot_count: number;
+  first_seen: string;
+  days_tracked: number;
+  // null means "not enough price history to tell" — render that as nothing,
+  // never as "not a record low".
+  at_all_time_low: boolean | null;
+  pct_below_high: number;
+  deal_score: number;
 }
 
 export interface CategoryCount {

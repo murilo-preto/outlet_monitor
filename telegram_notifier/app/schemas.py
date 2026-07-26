@@ -29,6 +29,14 @@ class PriceChange(BaseModel):
             "knows — inferred from old_price when omitted."
         ),
     )
+    all_time_low: bool | None = Field(
+        None,
+        description=(
+            "Whether this is the cheapest the product has ever been recorded "
+            "at. None means there is not enough price history to tell, which "
+            "is not the same as False — only the caller keeps that history."
+        ),
+    )
 
 
 class NotifyRequest(BaseModel):

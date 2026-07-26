@@ -4,12 +4,13 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ExternalLink, Package, Tag } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { DealBadge } from "./DealBadge";
 import { PriceHistoryChart } from "./PriceHistoryChart";
 import { PriceRangeGrid } from "./PriceRangeGrid";
 import { SpecsTable } from "./SpecsTable";
 import { getProductHistory } from "@/lib/api";
 import { getCategoryStyle } from "@/lib/categoryStyles";
-import { formatBRL } from "@/lib/format";
+import { formatBRL, formatDays } from "@/lib/format";
 import type { Product } from "@/lib/types";
 
 interface ProductDetailProps {
@@ -69,7 +70,15 @@ function ProductDetailContent({ product }: { product: Product }) {
 
         <h2 className="text-lg font-semibold text-ink">{product.name}</h2>
 
+        <DealBadge product={product} className="self-start" />
+
         <PriceRangeGrid product={product} className="max-w-[220px] text-sm" />
+
+        <p className="text-xs text-ink-muted">
+          {product.snapshot_count === 1
+            ? "Primeira coleta — sem histórico ainda"
+            : `Acompanhado há ${formatDays(product.days_tracked)} · ${product.snapshot_count} coletas`}
+        </p>
 
         <div className="flex items-baseline gap-2">
           <span className="text-3xl font-semibold text-ink">{formatBRL(product.sale_price)}</span>

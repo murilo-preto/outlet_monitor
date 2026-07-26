@@ -203,6 +203,53 @@ def test_get_latest_snapshots_includes_all_time_lowest_and_highest_price(conn):
     assert rows[0]["highest_price"] == 2252.92
 
 
+def test_get_latest_snapshots_includes_the_deal_metrics(conn):
+    for day, price in ((17, 2252.92), (18, 1999.00), (19, 2100.00), (20, 1800.00)):
+        append_snapshots(
+            conn,
+            [make_snapshot(timestamp=datetime(2026, 7, day, tzinfo=timezone.utc), sale_price=price)],
+        )
+
+    row = get_latest_snapshots(conn)[0]
+
+    assert row["snapshot_count"] == 4
+    assert row["first_seen"] == "2026-07-17T00:00:00+00:00"
+    assert row["days_tracked"] == 3.0
+    # Cheapest it has ever been, with four snapshots backing that up.
+    assert row["at_all_time_low"] is True
+    assert row["pct_below_high"] == pytest.approx(20.1, abs=0.05)
+    assert row["deal_score"] == pytest.approx(20.1, abs=0.05)
+
+
+def test_get_latest_snapshots_withholds_the_low_flag_on_thin_history(conn):
+    append_snapshots(conn, [make_snapshot(timestamp=datetime(2026, 7, 18, tzinfo=timezone.utc), sale_price=2000.0)])
+    append_snapshots(conn, [make_snapshot(timestamp=datetime(2026, 7, 19, tzinfo=timezone.utc), sale_price=1500.0)])
+
+    row = get_latest_snapshots(conn)[0]
+
+    # Cheapest of the two prices on record, but two points is not history.
+    assert row["snapshot_count"] == 2
+    assert row["at_all_time_low"] is None
+    # It can still rank, just heavily discounted (25% off peak x 1/3 confidence).
+    assert row["deal_score"] == pytest.approx(8.3, abs=0.05)
+
+
+def test_get_latest_snapshots_makes_no_claim_about_a_price_that_never_moved(conn):
+    for day in (17, 18, 19, 20):
+        append_snapshots(
+            conn,
+            [make_snapshot(timestamp=datetime(2026, 7, day, tzinfo=timezone.utc), sale_price=2000.0)],
+        )
+
+    row = get_latest_snapshots(conn)[0]
+
+    # The shape all real data had as of 2026-07-25: plenty of snapshots, one
+    # price throughout. There is no low to be at, and nothing to rank.
+    assert row["snapshot_count"] == 4
+    assert row["at_all_time_low"] is None
+    assert row["deal_score"] == 0.0
+
+
 def test_get_latest_snapshots_flags_products_missing_from_latest_scrape(conn):
     append_snapshots(
         conn,
@@ -371,6 +418,66 @@ def test_changes_since_previous_labels_a_price_move_as_price(conn):
     assert changes_since_previous(conn)[0]["event"] == "price"
 
 
+def test_changes_since_previous_withholds_the_low_flag_on_thin_history(conn):
+    day1 = datetime(2026, 7, 19, tzinfo=timezone.utc)
+    day2 = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    append_snapshots(conn, [make_snapshot(timestamp=day1, sale_price=2252.92)])
+    append_snapshots(conn, [make_snapshot(timestamp=day2, sale_price=2100.00)])
+
+    # Cheapest of two prices, but two is below MIN_SNAPSHOTS_FOR_HISTORY.
+    assert changes_since_previous(conn)[0]["all_time_low"] is None
+
+
+def test_changes_since_previous_flags_a_record_low(conn):
+    for day, price in ((17, 2252.92), (18, 2200.00), (19, 2100.00), (20, 1899.00)):
+        append_snapshots(
+            conn,
+            [make_snapshot(timestamp=datetime(2026, 7, day, tzinfo=timezone.utc), sale_price=price)],
+        )
+
+    assert changes_since_previous(conn)[0]["all_time_low"] is True
+
+
+def test_changes_since_previous_never_flags_a_rising_price_as_a_low(conn):
+    for day, price in ((17, 1899.00), (18, 2000.00), (19, 2100.00), (20, 2252.92)):
+        append_snapshots(
+            conn,
+            [make_snapshot(timestamp=datetime(2026, 7, day, tzinfo=timezone.utc), sale_price=price)],
+        )
+
+    change = changes_since_previous(conn)[0]
+    assert change["event"] == "price"
+    assert change["all_time_low"] is False
+
+
+def test_changes_since_previous_flags_a_relisted_product_at_a_record_low(conn):
+    # A sold-out configuration returning cheaper than it has ever been is the
+    # single most useful alert this produces, so the flag is not limited to
+    # "price" events.
+    for day, products, price in (
+        (17, ["anchor", "comes_back"], 2252.92),
+        (18, ["anchor", "comes_back"], 2200.00),
+        (19, ["anchor"], 2200.00),
+        (20, ["anchor", "comes_back"], 1750.00),
+    ):
+        append_snapshots(
+            conn,
+            [
+                make_snapshot(
+                    product_id=p,
+                    timestamp=datetime(2026, 7, day, tzinfo=timezone.utc),
+                    sale_price=price,
+                )
+                for p in products
+            ],
+        )
+
+    changes = {c["product_id"]: c for c in changes_since_previous(conn)}
+
+    assert changes["comes_back"]["event"] == "relisted"
+    assert changes["comes_back"]["all_time_low"] is True
+
+
 def test_append_snapshots_ignores_a_product_repeated_within_one_scrape(conn):
     day1 = datetime(2026, 7, 19, tzinfo=timezone.utc)
 
@@ -475,7 +582,15 @@ def test_connect_migrates_pre_category_schema(tmp_path):
             "specs": [],
             "lowest_price": 90.0,
             "highest_price": 90.0,
+            "snapshot_count": 1,
+            "first_seen": "2026-07-19T00:00:00+00:00",
             "currently_listed": True,
+            # A single snapshot is no price range at all: nothing can be
+            # claimed about it, so the low is unknown and it cannot rank.
+            "at_all_time_low": None,
+            "pct_below_high": 0.0,
+            "deal_score": 0.0,
+            "days_tracked": 0.0,
         }
     ]
 

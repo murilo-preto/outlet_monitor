@@ -1,3 +1,5 @@
+import pytest
+
 from app.report import MAX_MESSAGE_CHARS, build_messages, format_brl
 from app.schemas import NotifyRequest
 
@@ -71,6 +73,35 @@ def test_event_is_inferred_when_the_caller_omits_it():
 def test_explicit_event_beats_the_old_price_inference():
     # No old_price, but the caller knows this one has been listed before.
     assert "🔁" in only_message({"name": "Yoga", "new_price": 4999.00, "event": "relisted"})
+
+
+def test_record_low_is_marked_on_a_price_drop():
+    message = only_message({**DROP, "all_time_low": True})
+
+    assert "🔥" in message
+    assert "menor preço histórico" in message
+    # The drop itself must still render in full alongside the flag.
+    assert "R$ 4.999,00" in message
+
+
+@pytest.mark.parametrize("change", [NEW, RELISTED])
+def test_record_low_is_marked_on_listings_too(change):
+    # A configuration returning cheaper than ever is the alert worth having,
+    # so the flag is not limited to price moves.
+    assert "menor preço histórico" in only_message({**change, "all_time_low": True})
+
+
+@pytest.mark.parametrize("flag", [None, False])
+def test_no_record_marker_when_the_flag_is_absent_or_false(flag):
+    # None means "not enough history to tell" and must render exactly like an
+    # ordinary change — never as a claim that this isn't a low.
+    assert only_message({**DROP, "all_time_low": flag}) == only_message(DROP)
+
+
+def test_summary_counts_record_lows():
+    message = only_message({**DROP, "all_time_low": True}, {**NEW, "all_time_low": True}, RELISTED)
+
+    assert "2 no menor preço" in message
 
 
 def test_summary_counts_each_kind_of_change():

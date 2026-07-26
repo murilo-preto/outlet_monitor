@@ -3,6 +3,7 @@ import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
+from outlet_monitor import deals
 from outlet_monitor.models import ProductSnapshot
 
 DEFAULT_DB_PATH = Path("data/price_history.db")
@@ -105,8 +106,22 @@ COLUMNS = (
 _SELECT_COLUMNS = ", ".join(COLUMNS)
 _SELECT_COLUMNS_PH = ", ".join(f"ph.{col}" for col in COLUMNS)
 
+# Computed per read by LATEST_SNAPSHOT_SQL, never stored. Order must match the
+# trailing SELECT expressions there.
+_EXTRA_COLUMNS = (
+    "lowest_price",
+    "highest_price",
+    "snapshot_count",
+    "first_seen",
+    "currently_listed",
+)
+
+# snapshot_count and first_seen ride along on the aggregation that already
+# computes the price bounds — all four columns come from the same covering
+# index scan, so the extra deal metrics cost nothing beyond the two values.
 LATEST_SNAPSHOT_SQL = f"""
 SELECT {_SELECT_COLUMNS_PH}, bounds.lowest_price, bounds.highest_price,
+    bounds.snapshot_count, bounds.first_seen,
     ph.timestamp = (SELECT MAX(timestamp) FROM price_history) AS currently_listed
 FROM price_history ph
 INNER JOIN (
@@ -115,7 +130,8 @@ INNER JOIN (
     GROUP BY product_id
 ) latest ON ph.product_id = latest.product_id AND ph.timestamp = latest.max_ts
 INNER JOIN (
-    SELECT product_id, MIN(sale_price) AS lowest_price, MAX(sale_price) AS highest_price
+    SELECT product_id, MIN(sale_price) AS lowest_price, MAX(sale_price) AS highest_price,
+        COUNT(*) AS snapshot_count, MIN(timestamp) AS first_seen
     FROM price_history
     GROUP BY product_id
 ) bounds ON ph.product_id = bounds.product_id
@@ -146,6 +162,16 @@ WHERE timestamp = ?
 
 SEEN_BEFORE_SQL = """
 SELECT DISTINCT product_id FROM price_history WHERE timestamp < ?
+"""
+
+# Bounded at the run being reported on, so a scrape committing concurrently
+# can't make a change look like a record it isn't. The current run's own rows
+# are already committed when changes_since_previous() runs, so they count.
+ALL_TIME_LOW_SQL = """
+SELECT product_id, MIN(sale_price), MAX(sale_price), COUNT(*)
+FROM price_history
+WHERE timestamp <= ?
+GROUP BY product_id
 """
 
 CATEGORY_COUNTS_SQL = """
@@ -287,10 +313,13 @@ def get_latest_snapshots(conn: sqlite3.Connection, category: str | None = None) 
     rows = conn.execute(sql, params).fetchall()
     result = []
     for row in rows:
-        snapshot = _row_to_dict(row[:-3])
-        snapshot["lowest_price"], snapshot["highest_price"] = row[-3], row[-2]
-        snapshot["currently_listed"] = bool(row[-1])
-        result.append(snapshot)
+        # Split on len(COLUMNS) rather than counting back from the end: the
+        # trailing columns are positional, and indexing them negatively breaks
+        # silently every time COLUMNS grows.
+        snapshot = _row_to_dict(row[: len(COLUMNS)])
+        snapshot.update(zip(_EXTRA_COLUMNS, row[len(COLUMNS) :]))
+        snapshot["currently_listed"] = bool(snapshot["currently_listed"])
+        result.append(deals.enrich(snapshot))
     return result
 
 
@@ -314,6 +343,16 @@ def get_product_history(conn: sqlite3.Connection, product_id: str) -> list[dict]
 PRICE_EPSILON = 0.01
 
 
+def _all_time_lows(
+    conn: sqlite3.Connection, current_ts: str
+) -> dict[str, tuple[float, float, int]]:
+    """product_id -> (lowest, highest, snapshot count) sale_price, up to current_ts."""
+    return {
+        product_id: (lowest, highest, count)
+        for product_id, lowest, highest, count in conn.execute(ALL_TIME_LOW_SQL, (current_ts,))
+    }
+
+
 def changes_since_previous(conn: sqlite3.Connection) -> list[dict]:
     """What changed between the two most recent scrape runs.
 
@@ -330,6 +369,12 @@ def changes_since_previous(conn: sqlite3.Connection) -> list[dict]:
       configuration reappears days later — so this is worth telling apart from
       a genuinely new listing.
 
+    Each change also carries `all_time_low`: whether this price is the cheapest
+    ever recorded for the product, or None when there is too little history to
+    say (see deals.is_all_time_low). It is set for every event, not just price
+    moves — a sold-out configuration returning at its cheapest-ever price is
+    exactly the alert worth receiving.
+
     Returns an empty list when there is only one scrape on record: on a fresh
     database every product would otherwise look "new" and produce a report
     hundreds of items long.
@@ -343,6 +388,7 @@ def changes_since_previous(conn: sqlite3.Connection) -> list[dict]:
         row[0]: row for row in conn.execute(SNAPSHOT_AT_SQL, (previous_ts,))
     }
     seen_before = {row[0] for row in conn.execute(SEEN_BEFORE_SQL, (previous_ts,))}
+    lows = _all_time_lows(conn, current_ts)
 
     changes = []
     for product_id, name, url, sale_price, category in conn.execute(
@@ -358,6 +404,7 @@ def changes_since_previous(conn: sqlite3.Connection) -> list[dict]:
         else:
             continue
 
+        lowest, highest, snapshot_count = lows.get(product_id, (sale_price, sale_price, 1))
         changes.append(
             {
                 "product_id": product_id,
@@ -367,6 +414,9 @@ def changes_since_previous(conn: sqlite3.Connection) -> list[dict]:
                 "old_price": old_price,
                 "new_price": sale_price,
                 "event": event,
+                "all_time_low": deals.is_all_time_low(
+                    sale_price, lowest, highest, snapshot_count
+                ),
             }
         )
     return changes

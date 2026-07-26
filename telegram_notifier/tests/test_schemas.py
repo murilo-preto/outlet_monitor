@@ -11,6 +11,15 @@ def test_minimal_change_only_needs_a_name_and_a_price():
     assert change.url is None
     assert change.category is None
     assert change.event is None
+    assert change.all_time_low is None
+
+
+def test_all_time_low_distinguishes_unknown_from_false():
+    # None ("not enough history") and False ("not a low") are different claims
+    # and must survive the round trip as different values.
+    assert PriceChange(name="x", new_price=1.0, all_time_low=False).all_time_low is False
+    assert PriceChange(name="x", new_price=1.0, all_time_low=True).all_time_low is True
+    assert PriceChange(name="x", new_price=1.0).all_time_low is None
 
 
 @pytest.mark.parametrize("event", ["price", "new", "relisted"])

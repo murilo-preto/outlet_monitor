@@ -3,6 +3,7 @@
 import { motion } from "framer-motion";
 import { Package } from "lucide-react";
 
+import { DealBadge } from "./DealBadge";
 import { PriceRangeGrid } from "./PriceRangeGrid";
 import { formatBRL } from "@/lib/format";
 import type { Product } from "@/lib/types";
@@ -11,15 +12,24 @@ interface ProductCardProps {
   product: Product;
   selected: boolean;
   onSelect: (product: Product) => void;
+  // Sizing is the caller's business: fixed-width in the carousel, fluid in the
+  // deals grid. Kept as a whole class rather than appended to a default, since
+  // two competing width utilities resolve by stylesheet order, not prop order.
+  sizeClassName?: string;
 }
 
-export function ProductCard({ product, selected, onSelect }: ProductCardProps) {
+export function ProductCard({
+  product,
+  selected,
+  onSelect,
+  sizeClassName = "w-64 shrink-0",
+}: ProductCardProps) {
   return (
     <motion.button
       onClick={() => onSelect(product)}
       whileHover={{ y: -4 }}
       whileTap={{ scale: 0.98 }}
-      className={`flex w-64 shrink-0 flex-col overflow-hidden rounded-2xl border bg-surface text-left transition-shadow ${
+      className={`flex ${sizeClassName} flex-col overflow-hidden rounded-2xl border bg-surface text-left transition-shadow ${
         selected ? "border-accent ring-2 ring-accent" : "border-border"
       } ${!product.currently_listed ? "opacity-50 grayscale" : ""}`}
     >
@@ -45,6 +55,8 @@ export function ProductCard({ product, selected, onSelect }: ProductCardProps) {
 
       <div className="flex flex-1 flex-col gap-2 p-4">
         <h3 className="line-clamp-2 text-sm font-medium text-ink">{product.name}</h3>
+
+        <DealBadge product={product} className="self-start" />
 
         <PriceRangeGrid product={product} className="text-xs" />
 
