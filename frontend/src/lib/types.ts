@@ -40,6 +40,29 @@ export interface CategoryCount {
   product_count: number;
 }
 
+export interface ScrapeRun {
+  id: number;
+  started_at: string;
+  finished_at: string;
+  status: "ok" | "failed";
+  trigger: "manual" | "scheduled";
+  products_fetched: number;
+  rows_written: number;
+  duration_seconds: number;
+  error: string;
+}
+
+export interface ScrapeStatus {
+  last_run: ScrapeRun | null;
+  // null on a database that has never recorded a successful scrape — render
+  // that as "—", never as a number.
+  last_success_at: string | null;
+  hours_since_last_success: number | null;
+  consecutive_failures: number;
+  stale: boolean;
+  products_tracked: number;
+}
+
 export interface ScrapeResult {
   fetched: number;
   written: number;

@@ -141,6 +141,45 @@ def test_send_price_changes_tolerates_missing_optional_keys(monkeypatch):
     }
 
 
+def test_send_admin_alert_posts_to_the_alert_endpoint(monkeypatch):
+    calls = []
+
+    def fake_post(url, json=None, timeout=None):
+        calls.append((url, json))
+        return FakeResponse()
+
+    monkeypatch.setattr(notify.requests, "post", fake_post)
+    monkeypatch.delenv("NOTIFIER_URL", raising=False)
+
+    assert notify.send_admin_alert("coleta falhou", level="error") is True
+
+    url, payload = calls[0]
+    # A dedicated endpoint, not /notify — that one fans out to every
+    # subscriber and carries price changes, which an ops alert is not.
+    assert url == "http://notifier:8000/alert"
+    assert payload == {"text": "coleta falhou", "level": "error"}
+
+
+def test_send_admin_alert_swallows_a_dead_notifier(monkeypatch):
+    def fake_post(url, json=None, timeout=None):
+        raise requests.ConnectionError("notifier is down")
+
+    monkeypatch.setattr(notify.requests, "post", fake_post)
+
+    # The alert exists to report a failure; it must not become one itself.
+    assert notify.send_admin_alert("coleta falhou") is False
+
+
+def test_send_admin_alert_is_disabled_by_an_empty_notifier_url(monkeypatch):
+    def explode(*args, **kwargs):
+        raise AssertionError("should not have been called")
+
+    monkeypatch.setattr(notify.requests, "post", explode)
+    monkeypatch.setenv("NOTIFIER_URL", "")
+
+    assert notify.send_admin_alert("coleta falhou") is False
+
+
 def test_send_price_changes_swallows_unexpected_errors(monkeypatch):
     monkeypatch.setattr(notify.requests, "post", lambda *a, **kw: FakeResponse())
 

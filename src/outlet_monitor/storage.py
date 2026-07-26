@@ -1,6 +1,7 @@
 import json
 import sqlite3
 from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
 
 from outlet_monitor import deals
@@ -45,6 +46,55 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 );
 """
 SPECS_VERSION_KEY = "specs_parser_version"
+
+# One row per scrape attempt, successful or not. Separate from price_history,
+# which stays a pure record of observed prices: a failed run has no prices to
+# record, and that failure is exactly what needs to be visible.
+CREATE_SCRAPE_RUNS_SQL = """
+CREATE TABLE IF NOT EXISTS scrape_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    products_fetched INTEGER NOT NULL DEFAULT 0,
+    rows_written INTEGER NOT NULL DEFAULT 0,
+    duration_seconds REAL NOT NULL,
+    error TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_scrape_runs_started_at ON scrape_runs(started_at);
+"""
+
+SCRAPE_RUN_COLUMNS = (
+    "id",
+    "started_at",
+    "finished_at",
+    "status",
+    "trigger",
+    "products_fetched",
+    "rows_written",
+    "duration_seconds",
+    "error",
+)
+
+INSERT_SCRAPE_RUN_SQL = """
+INSERT INTO scrape_runs
+    (started_at, finished_at, status, trigger, products_fetched, rows_written, duration_seconds, error)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+LAST_SCRAPE_RUN_SQL = f"""
+SELECT {", ".join(SCRAPE_RUN_COLUMNS)} FROM scrape_runs ORDER BY id DESC LIMIT 1
+"""
+
+LAST_SUCCESS_SQL = """
+SELECT MAX(finished_at) FROM scrape_runs WHERE status = 'ok'
+"""
+
+# Bounded: a long outage must not make this walk the whole table.
+RECENT_RUN_STATUSES_SQL = """
+SELECT status FROM scrape_runs ORDER BY id DESC LIMIT 20
+"""
 
 # Indexes are created after migrations run, since they reference columns that
 # may not exist yet on a pre-existing db file.
@@ -321,6 +371,7 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     _apply_pragmas(conn)
     conn.executescript(CREATE_TABLE_SQL)
     conn.executescript(CREATE_META_TABLE_SQL)
+    conn.executescript(CREATE_SCRAPE_RUNS_SQL)
     _apply_migrations(conn)
     _ensure_parsed_specs(conn)
     conn.executescript(CREATE_INDEXES_SQL)
@@ -514,6 +565,72 @@ def changes_since_previous(conn: sqlite3.Connection) -> list[dict]:
             }
         )
     return changes
+
+
+def record_scrape_run(
+    conn: sqlite3.Connection,
+    *,
+    started_at: str,
+    finished_at: str,
+    status: str,
+    trigger: str,
+    products_fetched: int = 0,
+    rows_written: int = 0,
+    error: str = "",
+) -> None:
+    """Record the outcome of one scrape attempt, successful or not."""
+    duration = (
+        datetime.fromisoformat(finished_at) - datetime.fromisoformat(started_at)
+    ).total_seconds()
+    conn.execute(
+        INSERT_SCRAPE_RUN_SQL,
+        (
+            started_at,
+            finished_at,
+            status,
+            trigger,
+            products_fetched,
+            rows_written,
+            duration,
+            error,
+        ),
+    )
+    conn.commit()
+
+
+def get_last_scrape_run(conn: sqlite3.Connection) -> dict | None:
+    row = conn.execute(LAST_SCRAPE_RUN_SQL).fetchone()
+    return dict(zip(SCRAPE_RUN_COLUMNS, row)) if row else None
+
+
+def get_last_success_at(conn: sqlite3.Connection) -> str | None:
+    """When a scrape last succeeded, falling back to the newest stored snapshot.
+
+    The fallback carries every database that predates scrape_runs. Without it,
+    an install with years of price history reports "never succeeded" until its
+    next scrape, and the UI raises a staleness alarm over a healthy system.
+    """
+    row = conn.execute(LAST_SUCCESS_SQL).fetchone()
+    if row and row[0]:
+        return row[0]
+
+    row = conn.execute("SELECT MAX(timestamp) FROM price_history").fetchone()
+    return row[0] if row else None
+
+
+def count_consecutive_failures(conn: sqlite3.Connection) -> int:
+    """How many scrapes have failed in a row, counting back from the newest."""
+    failures = 0
+    for (status,) in conn.execute(RECENT_RUN_STATUSES_SQL):
+        if status == "ok":
+            break
+        failures += 1
+    return failures
+
+
+def count_tracked_products(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COUNT(DISTINCT product_id) FROM price_history").fetchone()
+    return row[0] if row else 0
 
 
 def get_category_counts(conn: sqlite3.Connection) -> list[dict]:

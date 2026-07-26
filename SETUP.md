@@ -56,6 +56,9 @@ Edit `.env.prod`:
 |---|---|
 | `SCRAPE_SECRET` | Password required to trigger a scrape (`POST /api/scrape`) from the internet. Generate one with `openssl rand -hex 24`. If left unset, the scrape endpoint is unauthenticated — fine for local dev, not recommended once this is public. |
 | `HOURS_BETWEEN_FETCH` | How often, in hours, the API automatically scrapes and stores a new price snapshot in the background, independent of any manual "Atualizar preços" clicks. Defaults to `24` if unset. |
+| `TELEGRAM_BOT_TOKEN` | Token of the Telegram bot used by the `notifier` service. Get one from @BotFather. |
+| `ADMIN_CHAT_ID` | Chat that receives an alert when scraping fails repeatedly. Message @userinfobot on Telegram to find your own chat id. Optional — leave empty and failures are only visible in `/status` and the logs. |
+| `SCRAPE_FAILURES_BEFORE_ALERT` | How many consecutive failures trigger that alert. One message per outage, not per failure. Defaults to `3`. |
 
 `.env.prod` is gitignored — never commit it.
 
@@ -129,6 +132,12 @@ scrape — the first time, it'll prompt for the `SCRAPE_SECRET` password
 
 ## Common operations
 
+- Check that collection is still healthy (last successful scrape, consecutive
+  failures, staleness): `curl -s http://127.0.0.1:3001/api/status`. The
+  homepage shows the same thing as an "Atualizado há ..." line under the
+  heading. Note `/health` is deliberately *not* this — it is the container
+  liveness probe and stays `{"status": "ok"}` even when data is stale, so a
+  Lenovo API change never turns into a restart loop.
 - Logs: `docker compose -f docker-compose.prod.yml logs -f`
 - Stop (data persists): `docker compose -f docker-compose.prod.yml down`
 - Run the backend test suite: `docker compose run --rm api pytest -q`

@@ -13,8 +13,12 @@ from outlet_monitor.storage import (
     append_snapshots,
     changes_since_previous,
     connect,
+    count_consecutive_failures,
     get_category_counts,
+    get_last_scrape_run,
+    get_last_success_at,
     get_latest_snapshots,
+    record_scrape_run,
 )
 
 
@@ -220,6 +224,83 @@ def test_connect_replays_the_backfill_when_the_parser_version_is_bumped(tmp_path
         assert conn.execute("SELECT ram_gb FROM price_history").fetchone()[0] == 16
     finally:
         conn.close()
+
+
+def test_scrape_run_round_trips(conn):
+    record_scrape_run(
+        conn,
+        started_at="2026-07-26T10:00:00+00:00",
+        finished_at="2026-07-26T10:00:12+00:00",
+        status="ok",
+        trigger="scheduled",
+        products_fetched=117,
+        rows_written=117,
+    )
+
+    run = get_last_scrape_run(conn)
+
+    assert run["status"] == "ok"
+    assert run["trigger"] == "scheduled"
+    assert run["products_fetched"] == 117
+    assert run["duration_seconds"] == 12.0
+    assert run["error"] == ""
+
+
+def test_get_last_scrape_run_is_none_on_an_empty_database(conn):
+    assert get_last_scrape_run(conn) is None
+
+
+def test_count_consecutive_failures_stops_at_the_most_recent_success(conn):
+    for status in ("failed", "ok", "failed", "failed"):
+        record_scrape_run(
+            conn,
+            started_at="2026-07-26T10:00:00+00:00",
+            finished_at="2026-07-26T10:00:01+00:00",
+            status=status,
+            trigger="scheduled",
+        )
+
+    # Two failures since the last 'ok'; the earlier one must not be counted.
+    assert count_consecutive_failures(conn) == 2
+
+
+def test_count_consecutive_failures_is_zero_without_any_runs(conn):
+    assert count_consecutive_failures(conn) == 0
+
+
+def test_get_last_success_at_falls_back_to_the_newest_snapshot(conn):
+    # The production-upgrade case: years of price history, no scrape_runs rows
+    # yet. Without the fallback this reports "never succeeded" and the UI
+    # raises a staleness alarm over a perfectly healthy install.
+    append_snapshots(conn, [make_snapshot(timestamp=datetime(2026, 7, 25, tzinfo=timezone.utc))])
+
+    assert get_last_success_at(conn) == "2026-07-25T00:00:00+00:00"
+
+
+def test_get_last_success_at_prefers_a_recorded_run(conn):
+    append_snapshots(conn, [make_snapshot(timestamp=datetime(2026, 7, 25, tzinfo=timezone.utc))])
+    record_scrape_run(
+        conn,
+        started_at="2026-07-26T10:00:00+00:00",
+        finished_at="2026-07-26T10:00:05+00:00",
+        status="ok",
+        trigger="manual",
+    )
+
+    assert get_last_success_at(conn) == "2026-07-26T10:00:05+00:00"
+
+
+def test_get_last_success_at_ignores_failed_runs(conn):
+    record_scrape_run(
+        conn,
+        started_at="2026-07-26T10:00:00+00:00",
+        finished_at="2026-07-26T10:00:05+00:00",
+        status="failed",
+        trigger="scheduled",
+        error="stale pageFilterId",
+    )
+
+    assert get_last_success_at(conn) is None
 
 
 def test_append_snapshots_writes_rows(conn):

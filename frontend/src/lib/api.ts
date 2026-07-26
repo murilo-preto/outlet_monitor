@@ -1,4 +1,4 @@
-import type { CategoryCount, Product, ScrapeResult } from "./types";
+import type { CategoryCount, Product, ScrapeResult, ScrapeStatus } from "./types";
 
 // Relative paths — these hit this app's own Route Handlers (frontend/src/app/api/*),
 // which proxy server-side to the Flask API over the internal Docker network.
@@ -19,6 +19,10 @@ export function getCategories(): Promise<CategoryCount[]> {
 export function getProducts(category?: string): Promise<Product[]> {
   const query = category ? `?category=${encodeURIComponent(category)}` : "";
   return getJSON<Product[]>(`/api/products${query}`);
+}
+
+export function getStatus(): Promise<ScrapeStatus> {
+  return getJSON<ScrapeStatus>("/api/status");
 }
 
 export function getProductHistory(productId: string): Promise<Product[]> {

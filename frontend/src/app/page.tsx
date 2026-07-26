@@ -8,20 +8,21 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { BestDeals } from "@/components/BestDeals";
 import { CategoryTabs } from "@/components/CategoryTabs";
 import { ExportButton } from "@/components/ExportButton";
+import { LastUpdated } from "@/components/LastUpdated";
 import { ProductCarousel } from "@/components/ProductCarousel";
 import { ProductDetail } from "@/components/ProductDetail";
 import { ProductFilters } from "@/components/ProductFilters";
 import { ProductsTable } from "@/components/ProductsTable";
 import { ScrapeButton } from "@/components/ScrapeButton";
 import { SiteHeader } from "@/components/SiteHeader";
-import { getCategories, getProducts } from "@/lib/api";
+import { getCategories, getProducts, getStatus } from "@/lib/api";
 import {
   DEFAULT_FILTERS,
   applyFilters,
   filterOptions,
   type ProductFilters as ProductFilterState,
 } from "@/lib/productFilter";
-import type { CategoryCount, Product } from "@/lib/types";
+import type { CategoryCount, Product, ScrapeStatus } from "@/lib/types";
 
 export default function Home() {
   const [categories, setCategories] = useState<CategoryCount[]>([]);
@@ -29,6 +30,7 @@ export default function Home() {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [filters, setFilters] = useState<ProductFilterState>(DEFAULT_FILTERS);
+  const [status, setStatus] = useState<ScrapeStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -61,9 +63,15 @@ export default function Home() {
   const loadOverview = useCallback(async () => {
     setError(null);
     try {
-      const [cats, products] = await Promise.all([getCategories(), getProducts()]);
+      // Status rides along here so the ScrapeButton's onDone refreshes it too.
+      const [cats, products, scrapeStatus] = await Promise.all([
+        getCategories(),
+        getProducts(),
+        getStatus(),
+      ]);
       setCategories(cats);
       setAllProducts(products);
+      setStatus(scrapeStatus);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao carregar dados");
     } finally {
@@ -109,6 +117,7 @@ export default function Home() {
               Veja a variação de preço dos notebooks ThinkPad, IdeaPad, Yoga e outras linhas
               ao longo do tempo, organizados por categoria.
             </p>
+            <LastUpdated status={status} />
           </div>
         </motion.section>
 

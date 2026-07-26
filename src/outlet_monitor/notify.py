@@ -22,17 +22,34 @@ def _notifier_url() -> str:
     return os.environ.get("NOTIFIER_URL", DEFAULT_NOTIFIER_URL).strip().rstrip("/")
 
 
+def _post(path: str, payload: dict, what: str) -> bool:
+    """POST to the notifier, swallowing every failure. Never raises."""
+    base_url = _notifier_url()
+    if not base_url:
+        log.debug("NOTIFIER_URL is empty, skipping %s", what)
+        return False
+
+    try:
+        response = requests.post(f"{base_url}{path}", json=payload, timeout=TIMEOUT_SECONDS)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        log.warning("could not send %s: %s", what, exc)
+        return False
+    except Exception:
+        # Belt and braces: notifying is never worth losing a scrape over.
+        log.exception("unexpected error sending %s", what)
+        return False
+
+    log.info("sent %s: %s", what, response.text.strip())
+    return True
+
+
 def send_price_changes(changes: list[dict]) -> bool:
     """POST the changes to the notifier. Returns whether it was delivered.
 
     Never raises — every failure mode is logged and swallowed.
     """
     if not changes:
-        return False
-
-    base_url = _notifier_url()
-    if not base_url:
-        log.debug("NOTIFIER_URL is empty, skipping notification")
         return False
 
     try:
@@ -59,20 +76,22 @@ def send_price_changes(changes: list[dict]) -> bool:
                 for change in changes
             ]
         }
-        response = requests.post(
-            f"{base_url}/notify", json=payload, timeout=TIMEOUT_SECONDS
-        )
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        log.warning("could not notify %d price change(s): %s", len(changes), exc)
-        return False
     except Exception:
-        # Belt and braces: notifying is never worth losing a scrape over.
-        log.exception("unexpected error notifying %d price change(s)", len(changes))
+        # A malformed change must be logged, not raised into the scrape.
+        log.exception("unexpected error building payload for %d change(s)", len(changes))
         return False
 
-    log.info("notified %d price change(s): %s", len(changes), response.text.strip())
-    return True
+    return _post("/notify", payload, f"{len(changes)} price change(s)")
+
+
+def send_admin_alert(text: str, level: str = "warning") -> bool:
+    """Tell the operator something is wrong. Same never-raise contract as above.
+
+    Goes to a dedicated endpoint rather than /notify: that one fans out to
+    every subscriber and carries a list of price changes, and an operational
+    alert is neither of those things.
+    """
+    return _post("/alert", {"text": text, "level": level}, "admin alert")
 
 
 def send_price_changes_async(changes: list[dict]) -> threading.Thread | None:
@@ -87,6 +106,15 @@ def send_price_changes_async(changes: list[dict]) -> threading.Thread | None:
 
     thread = threading.Thread(
         target=send_price_changes, args=(changes,), name="notify-price-changes", daemon=True
+    )
+    thread.start()
+    return thread
+
+
+def send_admin_alert_async(text: str, level: str = "warning") -> threading.Thread:
+    """Same as send_admin_alert, off the caller's thread."""
+    thread = threading.Thread(
+        target=send_admin_alert, args=(text, level), name="notify-admin-alert", daemon=True
     )
     thread.start()
     return thread

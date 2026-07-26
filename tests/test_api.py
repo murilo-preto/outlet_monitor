@@ -8,7 +8,7 @@ import pytest
 import outlet_monitor.api as api_module
 from outlet_monitor.models import ProductSnapshot
 from outlet_monitor.scrape import ScrapeError
-from outlet_monitor.storage import COLUMNS
+from outlet_monitor.storage import COLUMNS, connect
 
 
 def make_snapshot(**overrides) -> ProductSnapshot:
@@ -325,6 +325,91 @@ def test_run_scheduled_scrapes_recovers_from_scrape_error(client, monkeypatch):
         api_module._run_scheduled_scrapes(client.application, 0.01)
 
 
+def test_health_stays_a_dumb_liveness_probe(client):
+    # Wired into the Docker healthcheck in both compose files: if this ever
+    # reflects data staleness, a Lenovo API change becomes a restart loop.
+    assert client.get("/health").get_json() == {"status": "ok"}
+
+
+def test_status_on_an_empty_database_reports_nulls_without_erroring(client):
+    body = client.get("/status").get_json()
+
+    assert body["last_run"] is None
+    assert body["last_success_at"] is None
+    assert body["hours_since_last_success"] is None
+    assert body["consecutive_failures"] == 0
+    assert body["stale"] is False
+    assert body["products_tracked"] == 0
+
+
+def test_successful_scrape_records_an_ok_run(client, monkeypatch):
+    monkeypatch.setattr(api_module, "fetch_all_products", lambda: [make_snapshot()])
+
+    client.post("/scrape")
+    body = client.get("/status").get_json()
+
+    assert body["last_run"]["status"] == "ok"
+    assert body["last_run"]["trigger"] == "manual"
+    assert body["last_run"]["products_fetched"] == 1
+    assert body["consecutive_failures"] == 0
+    assert body["products_tracked"] == 1
+
+
+def test_failed_scrape_still_returns_502_and_records_the_failure(client, monkeypatch):
+    def raise_scrape_error():
+        raise ScrapeError("stale pageFilterId")
+
+    monkeypatch.setattr(api_module, "fetch_all_products", raise_scrape_error)
+
+    assert client.post("/scrape").status_code == 502
+
+    body = client.get("/status").get_json()
+    assert body["last_run"]["status"] == "failed"
+    assert "stale pageFilterId" in body["last_run"]["error"]
+    assert body["consecutive_failures"] == 1
+
+
+def test_status_flags_stale_data(client, monkeypatch):
+    conn = connect(client.application.config["DB_PATH"])
+    try:
+        api_module.record_scrape_run(
+            conn,
+            started_at="2026-01-01T00:00:00+00:00",
+            finished_at="2026-01-01T00:00:05+00:00",
+            status="ok",
+            trigger="scheduled",
+        )
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("HOURS_BETWEEN_FETCH", "8")
+    body = client.get("/status").get_json()
+
+    assert body["stale"] is True
+    assert body["hours_since_last_success"] > 8
+
+
+def test_repeated_failures_alert_the_operator_exactly_once(client, monkeypatch):
+    def raise_scrape_error():
+        raise ScrapeError("stale pageFilterId")
+
+    monkeypatch.setattr(api_module, "fetch_all_products", raise_scrape_error)
+    monkeypatch.setenv("SCRAPE_FAILURES_BEFORE_ALERT", "3")
+
+    alerts = []
+    monkeypatch.setattr(
+        api_module, "send_admin_alert_async", lambda text, level="warning": alerts.append(text)
+    )
+
+    for _ in range(5):
+        client.post("/scrape")
+
+    # One message per outage, not one per failed scrape: with >= instead of ==
+    # a week-long Lenovo change would send twenty-one identical alerts.
+    assert len(alerts) == 1
+    assert "3 tentativas seguidas" in alerts[0]
+
+
 def test_run_scheduled_scrapes_survives_a_database_write_failure(client, monkeypatch):
     """A locked/failing database must cost one interval, not the whole schedule.
 
@@ -354,3 +439,28 @@ def test_run_scheduled_scrapes_survives_a_database_write_failure(client, monkeyp
         api_module._run_scheduled_scrapes(client.application, 0.01)
 
     assert sleep_calls["n"] == 3
+
+
+def test_scheduled_scrape_failure_is_recorded_not_just_logged(client, monkeypatch):
+    def raise_scrape_error():
+        raise ScrapeError("stale pageFilterId")
+
+    monkeypatch.setattr(api_module, "fetch_all_products", raise_scrape_error)
+
+    sleep_calls = {"n": 0}
+
+    def fake_sleep(_seconds):
+        sleep_calls["n"] += 1
+        if sleep_calls["n"] > 1:
+            raise RuntimeError("stop loop")
+
+    monkeypatch.setattr(api_module.time, "sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError, match="stop loop"):
+        api_module._run_scheduled_scrapes(client.application, 0.01)
+
+    # The whole point: a background failure has to leave a trace somewhere the
+    # UI can see, not only in a log line that scrolls away.
+    body = client.get("/status").get_json()
+    assert body["last_run"]["status"] == "failed"
+    assert body["last_run"]["trigger"] == "scheduled"

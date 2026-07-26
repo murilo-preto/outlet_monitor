@@ -39,6 +39,9 @@ services:
       - "8000"
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      # Chat that receives scrape-failure alerts. Unset is a silent
+      # no-op, so this stays optional.
+      - ADMIN_CHAT_ID=${ADMIN_CHAT_ID:-}
     volumes:
       - notifier-data:/data
     healthcheck:

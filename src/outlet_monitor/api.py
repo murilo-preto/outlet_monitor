@@ -9,7 +9,7 @@ from pathlib import Path
 
 from flask import Flask, Response, jsonify, request
 
-from outlet_monitor.notify import send_price_changes_async
+from outlet_monitor.notify import send_admin_alert_async, send_price_changes_async
 from outlet_monitor.scrape import ScrapeError, fetch_all_products
 from outlet_monitor.storage import (
     COLUMNS,
@@ -17,10 +17,15 @@ from outlet_monitor.storage import (
     append_snapshots,
     changes_since_previous,
     connect,
+    count_consecutive_failures,
+    count_tracked_products,
     get_category_counts,
+    get_last_scrape_run,
+    get_last_success_at,
     get_latest_snapshots,
     get_product_history,
     iter_all_snapshots,
+    record_scrape_run,
 )
 
 
@@ -44,31 +49,46 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> Flask:
     @app.post("/scrape")
     def scrape():
         try:
-            products = fetch_all_products()
+            result = _perform_scrape(app, trigger="manual")
         except ScrapeError as exc:
             return jsonify({"error": str(exc)}), 502
+        return jsonify(result), 201
 
+    @app.get("/status")
+    def status():
+        """Whether data collection is actually still working.
+
+        Deliberately separate from /health, which is a liveness probe wired
+        into the Docker healthcheck. Folding staleness into that would turn
+        "Lenovo changed their API" into a container restart loop — strictly
+        worse than serving a page with old prices.
+        """
         conn = connect(app.config["DB_PATH"])
         try:
-            written = append_snapshots(conn, products)
-            changes = changes_since_previous(conn)
+            last_run = get_last_scrape_run(conn)
+            last_success_at = get_last_success_at(conn)
+            failures = count_consecutive_failures(conn)
+            tracked = count_tracked_products(conn)
         finally:
             conn.close()
 
-        # Handed to a background thread: the notifier is not on the critical
-        # path of a scrape, so this response never waits on Telegram.
-        send_price_changes_async(changes)
+        hours_since = None
+        if last_success_at:
+            delta = datetime.now(timezone.utc) - datetime.fromisoformat(last_success_at)
+            hours_since = round(delta.total_seconds() / 3600, 2)
 
-        return (
-            jsonify(
-                {
-                    "fetched": len(products),
-                    "written": written,
-                    "changes": len(changes),
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
-            ),
-            201,
+        interval = _hours_between_fetch()
+        return jsonify(
+            {
+                "last_run": last_run,
+                "last_success_at": last_success_at,
+                "hours_since_last_success": hours_since,
+                "consecutive_failures": failures,
+                # One missed cycle plus slack, so a scrape running slightly
+                # late never reads as broken.
+                "stale": hours_since is not None and hours_since > interval * STALE_MULTIPLIER,
+                "products_tracked": tracked,
+            }
         )
 
     @app.get("/categories")
@@ -144,7 +164,90 @@ def create_app(db_path: Path | str = DEFAULT_DB_PATH) -> Flask:
 
 DEFAULT_HOURS_BETWEEN_FETCH = 24.0
 
+# How many intervals may pass before the data is called stale: one missed
+# cycle plus slack.
+STALE_MULTIPLIER = 2.0
+
+DEFAULT_FAILURES_BEFORE_ALERT = 3
+
 log = logging.getLogger(__name__)
+
+
+def _hours_between_fetch() -> float:
+    return float(os.environ.get("HOURS_BETWEEN_FETCH", DEFAULT_HOURS_BETWEEN_FETCH))
+
+
+def _failures_before_alert() -> int:
+    return int(os.environ.get("SCRAPE_FAILURES_BEFORE_ALERT", DEFAULT_FAILURES_BEFORE_ALERT))
+
+
+def _perform_scrape(app: Flask, trigger: str) -> dict:
+    """Run one scrape end to end, recording the outcome either way.
+
+    Re-raises after recording, so both callers keep the error handling they
+    already had — 502 for the endpoint, log-and-continue for the scheduler —
+    while the failure still becomes visible in /status.
+    """
+    started_at = datetime.now(timezone.utc)
+
+    try:
+        products = fetch_all_products()
+    except ScrapeError as exc:
+        _record_failure(app, started_at, trigger, str(exc))
+        raise
+
+    conn = connect(app.config["DB_PATH"])
+    try:
+        written = append_snapshots(conn, products)
+        changes = changes_since_previous(conn)
+        finished_at = datetime.now(timezone.utc)
+        record_scrape_run(
+            conn,
+            started_at=started_at.isoformat(),
+            finished_at=finished_at.isoformat(),
+            status="ok",
+            trigger=trigger,
+            products_fetched=len(products),
+            rows_written=written,
+        )
+    finally:
+        conn.close()
+
+    # Handed to a background thread: the notifier is not on the critical path
+    # of a scrape, so this never waits on Telegram.
+    send_price_changes_async(changes)
+
+    return {
+        "fetched": len(products),
+        "written": written,
+        "changes": len(changes),
+        "timestamp": finished_at.isoformat(),
+    }
+
+
+def _record_failure(app: Flask, started_at: datetime, trigger: str, error: str) -> None:
+    """Persist a failed run and alert the operator once per outage streak."""
+    conn = connect(app.config["DB_PATH"])
+    try:
+        record_scrape_run(
+            conn,
+            started_at=started_at.isoformat(),
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            status="failed",
+            trigger=trigger,
+            error=error,
+        )
+        failures = count_consecutive_failures(conn)
+    finally:
+        conn.close()
+
+    # Equality, not >=: an outage lasting a week should produce one message,
+    # not one per scrape for a week.
+    if failures == _failures_before_alert():
+        send_admin_alert_async(
+            f"⚠️ Falha na coleta do outlet ({failures} tentativas seguidas)\n{error}",
+            level="error",
+        )
 
 
 def _run_scheduled_scrapes(app: Flask, interval_seconds: float) -> None:
@@ -156,40 +259,28 @@ def _run_scheduled_scrapes(app: Flask, interval_seconds: float) -> None:
     while True:
         time.sleep(interval_seconds)
         try:
-            products = fetch_all_products()
+            result = _perform_scrape(app, trigger="scheduled")
         except ScrapeError as exc:
             log.error("scheduled scrape failed: %s", exc)
             continue
-
-        # Everything below is wrapped because an exception escaping here kills
-        # this thread for good: the loop is the only thing keeping the schedule
-        # alive, and Flask keeps serving normally afterwards, so a dead thread
-        # looks exactly like a healthy deployment that has silently stopped
-        # collecting data. sqlite's "database is locked" is the realistic
-        # trigger (see storage._apply_pragmas), but any failure here should
-        # cost one interval, not every future one.
-        try:
-            conn = connect(app.config["DB_PATH"])
-            try:
-                written = append_snapshots(conn, products)
-                changes = changes_since_previous(conn)
-            finally:
-                conn.close()
         except Exception:
+            # Any other failure must cost one interval, not every future one:
+            # an exception escaping here kills this thread for good, and Flask
+            # keeps serving normally afterwards, so a dead thread looks exactly
+            # like a healthy deployment that silently stopped collecting data.
             log.exception("scheduled scrape: failed to persist snapshot")
             continue
 
-        send_price_changes_async(changes)
         log.info(
             "scheduled scrape: fetched=%d written=%d changes=%d",
-            len(products),
-            written,
-            len(changes),
+            result["fetched"],
+            result["written"],
+            result["changes"],
         )
 
 
 def start_scheduled_scrapes(app: Flask) -> None:
-    hours = float(os.environ.get("HOURS_BETWEEN_FETCH", DEFAULT_HOURS_BETWEEN_FETCH))
+    hours = _hours_between_fetch()
     thread = threading.Thread(
         target=_run_scheduled_scrapes, args=(app, hours * 3600), daemon=True
     )

@@ -17,9 +17,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 
 from . import store
+from .admin import send_admin_alert
 from .bot import build_application
 from .broadcast import broadcast
-from .schemas import CountResponse, NotifyRequest, NotifyResponse
+from .schemas import (
+    AlertRequest,
+    AlertResponse,
+    CountResponse,
+    NotifyRequest,
+    NotifyResponse,
+)
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -74,3 +81,14 @@ async def notify(payload: NotifyRequest):
     result = await broadcast(bot, payload)
     logger.info("notify: %s", result)
     return NotifyResponse(**result)
+
+
+@app.post("/alert", response_model=AlertResponse)
+async def alert(payload: AlertRequest):
+    bot = getattr(app.state, "bot", None)
+    if bot is None:
+        raise HTTPException(status_code=503, detail="bot is not ready yet")
+
+    sent = await send_admin_alert(bot, payload)
+    logger.info("alert: level=%s sent=%d", payload.level, sent)
+    return AlertResponse(sent=sent)

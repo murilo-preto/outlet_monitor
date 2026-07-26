@@ -54,3 +54,15 @@ class NotifyResponse(BaseModel):
 
 class CountResponse(BaseModel):
     count: int
+
+
+class AlertRequest(BaseModel):
+    """An operational message for the operator, not a price report."""
+
+    text: str = Field(..., min_length=1)
+    level: Literal["warning", "error"] = "warning"
+
+
+class AlertResponse(BaseModel):
+    # 0 when no admin chat is configured, which is a valid state, not an error.
+    sent: int

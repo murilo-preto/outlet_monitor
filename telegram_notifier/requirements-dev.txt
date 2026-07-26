@@ -1,2 +1,6 @@
 -r requirements.txt
 pytest>=8.0
+# fastapi.testclient is built on httpx, which FastAPI does not pull in itself.
+# Deliberately no pytest-asyncio: the async handlers are driven with
+# asyncio.run() from ordinary sync tests, so pytest.ini needs no asyncio_mode.
+httpx>=0.27
