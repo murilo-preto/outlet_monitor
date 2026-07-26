@@ -6,6 +6,7 @@ import pytest
 from outlet_monitor.models import ProductSnapshot
 from outlet_monitor.storage import (
     CREATE_TABLE_SQL,
+    LATEST_SNAPSHOT_SQL,
     append_snapshots,
     changes_since_previous,
     connect,
@@ -60,6 +61,80 @@ def test_connect_is_idempotent_on_existing_file(tmp_path):
     ).fetchall()
     conn2.close()
     assert tables == [("price_history",)]
+
+
+def test_connect_puts_a_file_backed_db_in_wal_mode(tmp_path):
+    # WAL is what lets a slow /export.csv reader coexist with the scheduled
+    # scrape's writer instead of locking it out.
+    db_path = tmp_path / "price_history.db"
+    conn = connect(db_path)
+    try:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert mode == "wal"
+    assert timeout == 10000
+
+
+def test_connect_builds_the_covering_index_and_drops_the_redundant_ones(conn):
+    indexes = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='price_history'"
+        )
+    }
+
+    assert "idx_price_history_pid_ts_price" in indexes
+    assert "idx_price_history_ts_product" in indexes
+    assert not indexes & {
+        "idx_price_history_product_id",
+        "idx_price_history_timestamp",
+        "idx_price_history_category",
+    }
+
+
+def test_connect_drops_redundant_indexes_left_by_an_older_schema(tmp_path):
+    db_path = tmp_path / "price_history.db"
+    old = sqlite3.connect(db_path)
+    old.executescript(CREATE_TABLE_SQL)
+    old.executescript(
+        "CREATE INDEX idx_price_history_product_id ON price_history(product_id);"
+        "CREATE INDEX idx_price_history_timestamp ON price_history(timestamp);"
+        "CREATE INDEX idx_price_history_category ON price_history(category);"
+    )
+    old.commit()
+    old.close()
+
+    conn = connect(db_path)
+    try:
+        indexes = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='price_history'"
+            )
+        }
+    finally:
+        conn.close()
+
+    assert "idx_price_history_pid_ts_price" in indexes
+    assert not indexes & {
+        "idx_price_history_product_id",
+        "idx_price_history_timestamp",
+        "idx_price_history_category",
+    }
+
+
+def test_latest_snapshot_query_uses_the_covering_index(conn):
+    append_snapshots(conn, [make_snapshot()])
+    plan = "\n".join(
+        str(row) for row in conn.execute("EXPLAIN QUERY PLAN " + LATEST_SNAPSHOT_SQL)
+    )
+
+    # The whole point of the composite index is that both GROUP BY subqueries
+    # resolve without touching the main table.
+    assert plan.count("COVERING INDEX idx_price_history_pid_ts_price") == 2
 
 
 def test_append_snapshots_writes_rows(conn):

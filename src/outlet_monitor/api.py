@@ -161,12 +161,24 @@ def _run_scheduled_scrapes(app: Flask, interval_seconds: float) -> None:
             log.error("scheduled scrape failed: %s", exc)
             continue
 
-        conn = connect(app.config["DB_PATH"])
+        # Everything below is wrapped because an exception escaping here kills
+        # this thread for good: the loop is the only thing keeping the schedule
+        # alive, and Flask keeps serving normally afterwards, so a dead thread
+        # looks exactly like a healthy deployment that has silently stopped
+        # collecting data. sqlite's "database is locked" is the realistic
+        # trigger (see storage._apply_pragmas), but any failure here should
+        # cost one interval, not every future one.
         try:
-            written = append_snapshots(conn, products)
-            changes = changes_since_previous(conn)
-        finally:
-            conn.close()
+            conn = connect(app.config["DB_PATH"])
+            try:
+                written = append_snapshots(conn, products)
+                changes = changes_since_previous(conn)
+            finally:
+                conn.close()
+        except Exception:
+            log.exception("scheduled scrape: failed to persist snapshot")
+            continue
+
         send_price_changes_async(changes)
         log.info(
             "scheduled scrape: fetched=%d written=%d changes=%d",

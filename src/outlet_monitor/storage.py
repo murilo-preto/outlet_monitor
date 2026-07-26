@@ -27,12 +27,30 @@ CREATE TABLE IF NOT EXISTS price_history (
 );
 """
 
-# Indexes are created after migrations run, since idx_price_history_category
-# references a column that may not exist yet on a pre-existing db file.
+# Indexes are created after migrations run, since they reference columns that
+# may not exist yet on a pre-existing db file.
+#
+# The composite index is what makes the two GROUP BY subqueries in
+# LATEST_SNAPSHOT_SQL *covering*: with only a single-column index on
+# product_id, sqlite walks it in product order but still has to fetch every
+# row from the main table to read `timestamp` and `sale_price`. Carrying all
+# three columns in the index removes those lookups entirely — measured at 15x
+# on /products and /categories at 45k rows (~4 months of scraping at the
+# current 3-per-day rate), and the gap widens from there.
+#
+# The three single-column indexes it replaces are all redundant now:
+#   - product_id is a prefix of this index;
+#   - timestamp is a prefix of the UNIQUE (timestamp, product_id) index below;
+#   - category was never chosen by any query plan, because get_latest_snapshots
+#     appends its WHERE *after* the joins, filtering the ~123-row result rather
+#     than the scan.
+# Dropped after the replacement exists, so there is never a window without one.
 CREATE_INDEXES_SQL = """
-CREATE INDEX IF NOT EXISTS idx_price_history_product_id ON price_history(product_id);
-CREATE INDEX IF NOT EXISTS idx_price_history_timestamp ON price_history(timestamp);
-CREATE INDEX IF NOT EXISTS idx_price_history_category ON price_history(category);
+CREATE INDEX IF NOT EXISTS idx_price_history_pid_ts_price
+    ON price_history(product_id, timestamp, sale_price);
+DROP INDEX IF EXISTS idx_price_history_product_id;
+DROP INDEX IF EXISTS idx_price_history_timestamp;
+DROP INDEX IF EXISTS idx_price_history_category;
 """
 
 # One row per product per scrape. The scraper already de-duplicates what the
@@ -173,10 +191,31 @@ def _ensure_unique_snapshot_index(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _apply_pragmas(conn: sqlite3.Connection) -> None:
+    """Put the connection in WAL mode with a write timeout.
+
+    Without WAL, a reader blocks writers outright: /export.csv holds a read
+    transaction open for the *entire* HTTP response (rows are pulled lazily as
+    the client consumes the stream), so a slow client downloading the export
+    would make the scheduled scrape's INSERT fail with "database is locked" —
+    measured at 5s to fail under the rollback journal, 0.3ms to succeed under
+    WAL. WAL lets that reader and the writer coexist.
+
+    journal_mode is a persistent property of the file (this is a no-op after
+    the first connection ever made to it); synchronous and busy_timeout are
+    per-connection and have to be set every time. synchronous=NORMAL is safe
+    under WAL — a crash can lose the last commit but cannot corrupt the file.
+    """
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+
+
 def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    _apply_pragmas(conn)
     conn.executescript(CREATE_TABLE_SQL)
     _apply_migrations(conn)
     conn.executescript(CREATE_INDEXES_SQL)

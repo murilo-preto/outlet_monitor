@@ -3,7 +3,7 @@
 import { motion } from "framer-motion";
 import { BellRing } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { CategoryTabs } from "@/components/CategoryTabs";
 import { ExportButton } from "@/components/ExportButton";
@@ -19,14 +19,22 @@ export default function Home() {
   const [categories, setCategories] = useState<CategoryCount[]>([]);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-  const [fetchedCategoryProducts, setFetchedCategoryProducts] = useState<Product[]>([]);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // null selectedCategory means "Todos" (all categories) — mirror allProducts
-  // directly rather than re-fetching the same data from the API.
-  const categoryProducts = selectedCategory === null ? allProducts : fetchedCategoryProducts;
+  // Derived, not fetched. /products?category=X returns exactly this filter —
+  // the API appends its WHERE after the same joins, so the round-trip bought
+  // nothing but latency. It also rendered the *previous* category's products
+  // for the duration of each fetch, which in turn selected a product from the
+  // wrong category and fired a third request for its price history.
+  const categoryProducts = useMemo(
+    () =>
+      selectedCategory === null
+        ? allProducts
+        : allProducts.filter((p) => p.category === selectedCategory),
+    [allProducts, selectedCategory]
+  );
   const selectedProduct =
     categoryProducts.find((p) => p.product_id === selectedProductId) ?? categoryProducts[0] ?? null;
 
@@ -50,17 +58,6 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadOverview();
   }, [loadOverview]);
-
-  useEffect(() => {
-    if (selectedCategory === null) return;
-    let cancelled = false;
-    getProducts(selectedCategory).then((products) => {
-      if (!cancelled) setFetchedCategoryProducts(products);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedCategory]);
 
   return (
     <div className="flex min-h-screen flex-col bg-page">

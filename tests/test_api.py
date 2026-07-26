@@ -1,5 +1,6 @@
 import csv
 import io
+import sqlite3
 from datetime import datetime, timezone
 
 import pytest
@@ -322,3 +323,34 @@ def test_run_scheduled_scrapes_recovers_from_scrape_error(client, monkeypatch):
 
     with pytest.raises(RuntimeError, match="stop loop"):
         api_module._run_scheduled_scrapes(client.application, 0.01)
+
+
+def test_run_scheduled_scrapes_survives_a_database_write_failure(client, monkeypatch):
+    """A locked/failing database must cost one interval, not the whole schedule.
+
+    Before this was handled, the OperationalError propagated out of the loop
+    and killed the daemon thread outright — Flask kept serving, so the
+    deployment looked healthy while silently never scraping again.
+    """
+    monkeypatch.setattr(api_module, "fetch_all_products", lambda: [make_snapshot()])
+
+    def raise_locked(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(api_module, "append_snapshots", raise_locked)
+
+    sleep_calls = {"n": 0}
+
+    def fake_sleep(_seconds):
+        sleep_calls["n"] += 1
+        if sleep_calls["n"] > 2:
+            raise RuntimeError("stop loop")
+
+    monkeypatch.setattr(api_module.time, "sleep", fake_sleep)
+
+    # Reaching the "stop loop" sentinel means the write failure was swallowed
+    # and the loop went round again, rather than the thread dying on the first.
+    with pytest.raises(RuntimeError, match="stop loop"):
+        api_module._run_scheduled_scrapes(client.application, 0.01)
+
+    assert sleep_calls["n"] == 3
